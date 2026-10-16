@@ -5,7 +5,7 @@ import numpy as np
 
 def extrair_features(video, stride, larg=640, nfeat=1000):
     cap = cv2.VideoCapture(video)
-    orb = cv2.ORB_create(nfeat)
+    orb = cv2.ORB_create(nfeat) # <<<< aqui
     idx, feats, nit = [], [], []
     i, g = 0, None
     while True:
@@ -16,7 +16,7 @@ def extrair_features(video, stride, larg=640, nfeat=1000):
             s = larg / f.shape[1]
             g = cv2.cvtColor(cv2.resize(f, None, fx=s, fy=s, interpolation=cv2.INTER_AREA),
                              cv2.COLOR_BGR2GRAY)
-            kp, d = orb.detectAndCompute(g, None)
+            kp, d = orb.detectAndCompute(g, None) # <<<< aqui
             pts = np.float32([k.pt for k in kp]) if kp else np.zeros((0, 2), np.float32)
             idx.append(i)
             feats.append((pts, d))
@@ -26,7 +26,7 @@ def extrair_features(video, stride, larg=640, nfeat=1000):
     return np.array(idx), feats, np.array(nit), (w, h), cap.get(cv2.CAP_PROP_FPS)
 
 
-class Sobreposicao:
+class Sobreposicao: # <<<< aqui
     def __init__(self, feats, wh):
         self.feats, self.cache = feats, {}
         w, h = wh
@@ -45,7 +45,7 @@ class Sobreposicao:
         if da is None or db is None or len(pa) < 20 or len(pb) < 20:
             return 0.0
         pares = [p for p in self.bf.knnMatch(db, da, k=2) if len(p) == 2]
-        bons = [m for m, n in pares if m.distance < 0.75 * n.distance]
+        bons = [m for m, n in pares if m.distance < 0.75 * n.distance] # <<<< aqui distance: 0.75 parametro .yaml
         if len(bons) < 15:
             return 0.0
         src = np.float32([pb[m.queryIdx] for m in bons])
@@ -119,10 +119,10 @@ def main():
             break
         if i in quadros:
             if f.shape[1] > a.largura:
-                s = a.largura / f.shape[1]
+                s = a.largura / f.shape[1] # <<<< aqui (imagem quadrada)
                 f = cv2.resize(f, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
             cv2.imwrite(os.path.join(a.saida, f"img_{quadros.pop(i):04d}.jpg"), f,
-                        [cv2.IMWRITE_JPEG_QUALITY, 95])
+                        [cv2.IMWRITE_JPEG_QUALITY, 95]) # <<<< aqui save com lossless
         i += 1
 
     #criacao do csv para registro dos quadros selecionados
