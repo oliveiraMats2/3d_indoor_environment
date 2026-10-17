@@ -1,3 +1,6 @@
 3d_image_video*
 frames/
 artifacts/
+results/
+__pycache__/
+.vscode/
