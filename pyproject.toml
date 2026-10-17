@@ -1,0 +1,5 @@
+[project]
+name = "3d-indoor-environment"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["opencv-contrib-python", "numpy", "pyyaml", "pydantic>=2", "tqdm"]
