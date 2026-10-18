@@ -75,6 +75,8 @@ matching:                     # src/matching (not implemented yet)
   name: brute_force           # brute_force | flann; exact, FLANN mixes index error with detector quality
   strategy: sequential        # sequential (consecutive frames) | all_pairs (ablation)
   cross_check: false          # must stay false: knnMatch(k=2) for Lowe excludes crossCheck
+  reps: 30                    # timed runs per pair, after warmup
+  warmup: 2                   # untimed runs discarded before measurement
   flann:
     checks: 50
     float_index: {algorithm: 1, trees: 5}                                          # KDTREE
