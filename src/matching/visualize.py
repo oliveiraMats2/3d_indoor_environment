@@ -52,7 +52,8 @@
 #     their figure can be drawn later from those files.
 #
 # Inputs / outputs:
-#   In: the two frames, keypoints.npy of each, matches_lowe.npy, inlier_mask.npy.
+#   In: the two frames, keypoints.npy of each and matches_lowe.npy from matching,
+#   plus inlier_mask.npy from epipolar/<detector>/<frameA>__<frameB>/.
 #   Out: one figure per registered pair under results/<run_id>/figures/matching/.
 #
 # Defaults (read from the YAML block visualize.matches, never hardcoded):
@@ -212,7 +213,8 @@ def run(cfg: dict, run_dir: str, frames_dir: str, seed: int) -> list[Path]:
     pair_number = 0
     for detector_dir in sorted(path for path in matching_root.iterdir() if path.is_dir()):
         for pair_dir in sorted(path for path in detector_dir.iterdir() if path.is_dir()):
-            mask_path = pair_dir / "inlier_mask.npy"
+            geometry_dir = root / "epipolar" / detector_dir.name / pair_dir.name
+            mask_path = geometry_dir / "inlier_mask.npy"
             if not mask_path.exists():
                 continue
 

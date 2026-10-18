@@ -53,6 +53,7 @@
 #   Partial logs (.npy), under results/<run_id>/matching/<detector>/<frameA>__<frameB>/:
 #     matches_raw.npy  (M, 3): queryIdx, trainIdx, distance
 #     matches_lowe.npy (K, 3)
+#   Geometry input under results/<run_id>/epipolar/<detector>/<frameA>__<frameB>/:
 #     inlier_mask.npy  (K,) bool
 #     times_ms.npy     (R,)
 #   Out: matching_metrics.csv under artifacts/<run_id>/.
@@ -149,7 +150,8 @@ def _pair_rows(run_dir: Path) -> list[dict[str, object]]:
     for detector_dir in detector_dirs:
         pair_dirs = sorted(path for path in detector_dir.iterdir() if path.is_dir())
         for pair_dir in pair_dirs:
-            mask_path = pair_dir / "inlier_mask.npy"
+            geometry_dir = run_dir / "epipolar" / detector_dir.name / pair_dir.name
+            mask_path = geometry_dir / "inlier_mask.npy"
             if not mask_path.exists():
                 continue
 

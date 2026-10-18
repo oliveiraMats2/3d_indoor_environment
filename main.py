@@ -24,8 +24,10 @@ import cv2
 import numpy as np
 import yaml
 
-from src import detectores, extrair_quadros, frame_quality, matching, relatorio
+from src import detectores, epipolar, extrair_quadros, frame_quality, matching, relatorio
 from src.constants import Config
+from src.matching import metrics as matching_metrics
+from src.matching import visualize as matching_visualize
 
 log = logging.getLogger("main")
 
@@ -111,11 +113,27 @@ def main():
         filters_cfg = cfg.filters.model_dump()
         stage("matching", matching.run, matching_cfg, filters_cfg, run_dir)
 
+    if cfg.geometry.enabled:
+        geometry_cfg = cfg.geometry.model_dump()
+        stage("geometry", epipolar.run, geometry_cfg, run_dir, ext.output_dir)
+
     report_cfg = cfg.report.model_dump()
     stage("report", relatorio.run, report_cfg, run_dir, ext.output_dir, artifacts_dir)
 
-    # ponytail: later stages are stubs; replace the raise with their run() once implemented
-    stubs = (("geometry", "src.epipolar"), ("evaluation", "src.evaluation"))
+    if cfg.matching.enabled and cfg.geometry.enabled:
+        stage("matching_metrics", matching_metrics.run, run_dir, artifacts_dir)
+        matches_visualize_cfg = cfg.visualize.matches.model_dump()
+        stage(
+            "matching_visualization",
+            matching_visualize.run,
+            matches_visualize_cfg,
+            run_dir,
+            ext.output_dir,
+            run.seed,
+        )
+
+    # ponytail: evaluation is still a stub; replace the raise once implemented
+    stubs = (("evaluation", "src.evaluation"),)
     for block, package in stubs:
 
         block_cfg = getattr(cfg, block)

@@ -51,7 +51,7 @@
 # Inputs / outputs:
 #   In: pts1, pts2 (K, 2) float32 Lowe-filtered matched pixels of one pair; K (3, 3).
 #   Out: F.npy (3,3), E.npy (3,3), inlier_mask.npy (K,) bool under
-#   results/<run_id>/epipolar/<frameA>__<frameB>/
+#   results/<run_id>/epipolar/<detector>/<frameA>__<frameB>/
 #
 # Defaults (read from the YAML block geometry, never hardcoded):
 #   ransac.method: USAC_MAGSAC   # less sensitive to the hard threshold than RANSAC
@@ -75,5 +75,126 @@
 # ==============================================================================
 
 # >>> BEGIN IMPLEMENTATION >>>
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+
+@dataclass(frozen=True)
+class EstimateResult:
+    fundamental: np.ndarray
+    essential: np.ndarray
+    inlier_mask: np.ndarray
+    sampson_errors: np.ndarray
+
+
+def _matrix_or_nan(matrix: np.ndarray | None) -> np.ndarray:
+    if matrix is None or matrix.size < 9:
+        return np.full((3, 3), np.nan, dtype=np.float64)
+    return np.asarray(matrix, dtype=np.float64).reshape(-1, 3, 3)[0]
+
+
+def _mask_or_false(mask: np.ndarray | None, size: int) -> np.ndarray:
+    if mask is None:
+        return np.zeros(size, dtype=bool)
+    flattened = np.asarray(mask).reshape(-1).astype(bool)
+    if len(flattened) != size:
+        raise ValueError("RANSAC returned an inlier mask with an unexpected size")
+    return flattened
+
+
+def _sampson_errors(
+    fundamental: np.ndarray,
+    first_points: np.ndarray,
+    second_points: np.ndarray,
+) -> np.ndarray:
+    if len(first_points) == 0 or np.isnan(fundamental).any():
+        return np.empty(0, dtype=np.float64)
+
+    first_h = np.column_stack((first_points, np.ones(len(first_points))))
+    second_h = np.column_stack((second_points, np.ones(len(second_points))))
+    lines_second = first_h @ fundamental.T
+    lines_first = second_h @ fundamental
+    numerator = np.sum(second_h * lines_second, axis=1) ** 2
+    denominator = (
+        lines_second[:, 0] ** 2
+        + lines_second[:, 1] ** 2
+        + lines_first[:, 0] ** 2
+        + lines_first[:, 1] ** 2
+    )
+    valid = denominator > np.finfo(np.float64).eps
+    errors = np.full(len(first_points), np.nan, dtype=np.float64)
+    errors[valid] = np.sqrt(numerator[valid] / denominator[valid])
+    return errors
+
+
+def estimate(cfg: dict, first_points: np.ndarray, second_points: np.ndarray, intrinsics: np.ndarray) -> EstimateResult:
+    """Estimate F and E and keep correspondences accepted by both models."""
+
+    first = np.asarray(first_points, dtype=np.float32).reshape(-1, 2)
+    second = np.asarray(second_points, dtype=np.float32).reshape(-1, 2)
+    if len(first) != len(second):
+        raise ValueError("first_points and second_points must have the same length")
+
+    size = len(first)
+    if size < 8:
+        empty_mask = np.zeros(size, dtype=bool)
+        nan_matrix = np.full((3, 3), np.nan, dtype=np.float64)
+        return EstimateResult(nan_matrix, nan_matrix.copy(), empty_mask, np.empty(0))
+
+    ransac = cfg["ransac"]
+    try:
+        method = getattr(cv2, ransac["method"])
+    except AttributeError as exc:
+        raise ValueError(f"OpenCV does not provide RANSAC method {ransac['method']!r}") from exc
+
+    fundamental_raw, fundamental_mask_raw = cv2.findFundamentalMat(
+        first,
+        second,
+        method,
+        ransac["threshold_px"],
+        ransac["confidence"],
+        ransac["max_iters"],
+    )
+    essential_raw, essential_mask_raw = cv2.findEssentialMat(
+        first,
+        second,
+        intrinsics,
+        method=method,
+        prob=ransac["confidence"],
+        threshold=ransac["threshold_px"],
+        maxIters=ransac["max_iters"],
+    )
+
+    fundamental = _matrix_or_nan(fundamental_raw)
+    essential = _matrix_or_nan(essential_raw)
+    fundamental_mask = _mask_or_false(fundamental_mask_raw, size)
+    essential_mask = _mask_or_false(essential_mask_raw, size)
+    inlier_mask = fundamental_mask & essential_mask
+    errors = _sampson_errors(fundamental, first[inlier_mask], second[inlier_mask])
+    return EstimateResult(fundamental, essential, inlier_mask, errors)
+
+
+def run(
+    cfg: dict,
+    output_dir: str | Path,
+    first_points: np.ndarray,
+    second_points: np.ndarray,
+    intrinsics: np.ndarray,
+) -> EstimateResult:
+    """Estimate and persist epipolar geometry for one frame pair."""
+
+    result = estimate(cfg, first_points, second_points, intrinsics)
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    np.save(destination / "F.npy", result.fundamental)
+    np.save(destination / "E.npy", result.essential)
+    np.save(destination / "K.npy", intrinsics)
+    np.save(destination / "inlier_mask.npy", result.inlier_mask)
+    np.save(destination / "sampson_errors.npy", result.sampson_errors)
+    return result
 
 # <<< END IMPLEMENTATION <<<

@@ -80,8 +80,6 @@ def _save_pair(
     times_ms: np.ndarray,
 ) -> None:
     pair_dir.mkdir(parents=True, exist_ok=True)
-    for stale_name in ("inlier_mask.npy", "F.npy", "E.npy"):
-        (pair_dir / stale_name).unlink(missing_ok=True)
     np.save(pair_dir / "matches_raw.npy", _as_array(raw_matches))
     np.save(pair_dir / "matches_lowe.npy", _as_array(lowe_matches))
     np.save(pair_dir / "times_ms.npy", times_ms)

@@ -25,8 +25,9 @@ python main.py --config configs/default.yaml
 2. **frame quality** (`src/frame_quality.py`): blur, exposure, contrast and texture checks.
 3. **detection** (`src/detectores.py`): SIFT x ORB x AKAZE keypoints and descriptors as `.npy`.
 4. **matching** (`src/matching`): BF/FLANN, Lowe filtering and runtime logs for the configured frame pairs.
-5. **report** (`src/relatorio.py`): CSVs and figures built only from the `.npy` files.
-6. **geometry** (`src/epipolar`) and **evaluation**: stubs, run only when `enabled: true`.
+5. **geometry** (`src/epipolar`): fundamental/essential matrices and RANSAC inlier masks.
+6. **report** (`src/relatorio.py`) and matching metrics/figures: artifacts built only from saved `.npy` files.
+7. **pose**, **triangulation** and **evaluation**: pending stages.
 
 ## Configs
 
@@ -57,7 +58,7 @@ src/
   detectores.py         stage 3
   relatorio.py          stage 4
   matching/             matcher, Lowe filter, metrics and figures
-  epipolar/             F and E, pose, epipolar lines, triangulation (stub)
+  epipolar/             F/E with RANSAC; pose, epipolar lines and triangulation are pending
   evaluation/           reprojection, metric error, loop drift, ablation (stub)
 ```
 
