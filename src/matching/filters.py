@@ -70,4 +70,43 @@
 
 # >>> BEGIN IMPLEMENTATION >>>
 
+from dataclasses import dataclass
+from typing import Optional, Sequence
+
+import cv2
+
+
+@dataclass(frozen=True)
+class LoweResult:
+    matches: list[cv2.DMatch]
+    success: bool
+    reason: Optional[str] = None
+
+
+def run(cfg: dict, neighbors: Sequence[Sequence[cv2.DMatch]]) -> LoweResult:
+    """Apply Lowe's ratio test to the two nearest matches per descriptor."""
+
+    ratio = float(cfg["lowe_ratio"])
+    min_matches = int(cfg["min_matches"])
+
+    if not 0.0 < ratio < 1.0:
+        raise ValueError("lowe_ratio must be between 0 and 1")
+    if min_matches < 1:
+        raise ValueError("min_matches must be at least 1")
+
+    accepted = [
+        pair[0]
+        for pair in neighbors
+        if len(pair) >= 2 and pair[0].distance < ratio * pair[1].distance
+    ]
+
+    if len(accepted) < min_matches:
+        return LoweResult(
+            matches=accepted,
+            success=False,
+            reason="below_min_matches",
+        )
+
+    return LoweResult(matches=accepted, success=True)
+
 # <<< END IMPLEMENTATION <<<

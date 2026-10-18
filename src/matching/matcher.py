@@ -74,4 +74,65 @@
 
 # >>> BEGIN IMPLEMENTATION >>>
 
+from typing import Literal
+
+import cv2
+import numpy as np
+
+
+DescriptorKind = Literal["binary", "float"]
+
+
+def descriptor_kind(descriptors: np.ndarray) -> DescriptorKind:
+    """Classify an OpenCV descriptor matrix from its NumPy dtype."""
+
+    if not isinstance(descriptors, np.ndarray):
+        raise TypeError("descriptors must be a NumPy array")
+    if descriptors.ndim != 2:
+        raise ValueError("descriptors must have shape (n_keypoints, descriptor_size)")
+
+    if descriptors.dtype == np.uint8:
+        return "binary"
+    if descriptors.dtype == np.float32:
+        return "float"
+
+    raise TypeError(
+        f"unsupported descriptor dtype {descriptors.dtype}; "
+        "expected uint8 (ORB/AKAZE) or float32 (SIFT)"
+    )
+
+
+def _brute_force(kind: DescriptorKind) -> cv2.DescriptorMatcher:
+    norm = cv2.NORM_HAMMING if kind == "binary" else cv2.NORM_L2
+    return cv2.BFMatcher(normType=norm, crossCheck=False)
+
+
+def _flann(cfg: dict, kind: DescriptorKind) -> cv2.DescriptorMatcher:
+    flann_cfg = cfg["flann"]
+    index_key = "binary_index" if kind == "binary" else "float_index"
+    index_params = dict(flann_cfg[index_key])
+    search_params = {"checks": flann_cfg["checks"]}
+    return cv2.FlannBasedMatcher(index_params, search_params)
+
+
+def run(cfg: dict, descriptors: np.ndarray) -> cv2.DescriptorMatcher:
+    """Build the configured matcher for one descriptor representation."""
+
+    if cfg.get("cross_check", False):
+        raise ValueError("cross_check must be false when Lowe's knnMatch(k=2) is used")
+
+    kind = descriptor_kind(descriptors)
+    factories = {
+        "brute_force": _brute_force,
+        "flann": lambda value: _flann(cfg, value),
+    }
+
+    try:
+        factory = factories[cfg["name"]]
+    except KeyError as exc:
+        supported = ", ".join(factories)
+        raise ValueError(f"unsupported matcher {cfg.get('name')!r}; choose {supported}") from exc
+
+    return factory(kind)
+
 # <<< END IMPLEMENTATION <<<
