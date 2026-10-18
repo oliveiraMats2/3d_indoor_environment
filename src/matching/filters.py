@@ -74,6 +74,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 import cv2
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -108,5 +109,23 @@ def run(cfg: dict, neighbors: Sequence[Sequence[cv2.DMatch]]) -> LoweResult:
         )
 
     return LoweResult(matches=accepted, success=True)
+
+
+def select_inliers(matches_lowe: np.ndarray, inlier_mask: np.ndarray) -> np.ndarray:
+    """Select geometrically consistent matches using a RANSAC mask."""
+
+    matches = np.asarray(matches_lowe)
+    mask = np.asarray(inlier_mask).reshape(-1)
+
+    if matches.ndim != 2 or matches.shape[1] != 3:
+        raise ValueError("matches_lowe must have shape (n_matches, 3)")
+    if len(mask) != len(matches):
+        raise ValueError(
+            "inlier_mask must contain one value for every Lowe-filtered match"
+        )
+    if not np.isin(mask, (0, 1, False, True)).all():
+        raise ValueError("inlier_mask must contain only boolean or 0/1 values")
+
+    return matches[mask.astype(bool)]
 
 # <<< END IMPLEMENTATION <<<
