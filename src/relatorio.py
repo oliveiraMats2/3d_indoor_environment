@@ -130,7 +130,7 @@ def write_csv(path, header, rows):
 def run(cfg: dict, run_dir: str, frames_dir: str, metrics_dir: str) -> None:
 
     k_path = os.path.join(run_dir, "K.npy")
-    K = np.load(k_path)
+    K = np.load(k_path) if os.path.exists(k_path) else None
     met = metrics_dir
     fig = os.path.join(run_dir, "figures")
     detection_dir = os.path.join(run_dir, "detection")
@@ -171,6 +171,10 @@ def run(cfg: dict, run_dir: str, frames_dir: str, metrics_dir: str) -> None:
         pairs = ls(mbase)
         progress = tqdm(pairs, desc=f"{det} report pairs", unit="pair")
         for pair in progress:
+
+            required = ("inlier_mask.npy", "E.npy")
+            if K is None or not all(os.path.exists(os.path.join(mbase, pair, name)) for name in required):
+                continue
 
             qa, qb = pair.split("__")
             raw = load_pair_file(mbase, pair, "matches_raw.npy")

@@ -4,11 +4,13 @@
 
 ## Setup
 
-Install dependencies into the `shopin` conda env with uv:
+Create a local Python 3.12 environment and install the dependencies with uv:
 
 ```bash
-conda activate shopin
-uv pip install --python "$(which python)" -r pyproject.toml
+uv python install 3.12
+uv venv --python 3.12 .venv
+source .venv/bin/activate
+uv pip install -r pyproject.toml
 ```
 
 ## Run
@@ -21,9 +23,10 @@ python main.py --config configs/default.yaml
 
 1. **extraction** (`src/extrair_quadros.py`): sharp frames with 60 to 80% overlap from the video.
 2. **frame quality** (`src/frame_quality.py`): blur, exposure, contrast and texture checks.
-3. **detection** (`src/detectores.py`): SIFT x ORB x AKAZE keypoints, descriptors and pair matching as `.npy`.
-4. **report** (`src/relatorio.py`): CSVs and figures built only from the `.npy` files.
-5. **matching**, **geometry** (`src/epipolar`), **evaluation**: stubs, run only when `enabled: true`.
+3. **detection** (`src/detectores.py`): SIFT x ORB x AKAZE keypoints and descriptors as `.npy`.
+4. **matching** (`src/matching`): BF/FLANN, Lowe filtering and runtime logs for the configured frame pairs.
+5. **report** (`src/relatorio.py`): CSVs and figures built only from the `.npy` files.
+6. **geometry** (`src/epipolar`) and **evaluation**: stubs, run only when `enabled: true`.
 
 ## Configs
 
@@ -53,7 +56,7 @@ src/
   frame_quality.py      stage 2
   detectores.py         stage 3
   relatorio.py          stage 4
-  matching/             matcher, Lowe filter, metrics, figures (stub)
+  matching/             matcher, Lowe filter, metrics and figures
   epipolar/             F and E, pose, epipolar lines, triangulation (stub)
   evaluation/           reprojection, metric error, loop drift, ablation (stub)
 ```

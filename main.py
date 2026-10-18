@@ -24,7 +24,7 @@ import cv2
 import numpy as np
 import yaml
 
-from src import detectores, extrair_quadros, frame_quality, relatorio
+from src import detectores, extrair_quadros, frame_quality, matching, relatorio
 from src.constants import Config
 
 log = logging.getLogger("main")
@@ -99,19 +99,23 @@ def main():
     quality_cfg = cfg.frame_quality.model_dump()
     metrics_csv = os.path.join(artifacts_dir, "frame_quality_metrics.csv")
     kept = stage("frame_quality", frame_quality.run, quality_cfg, frames, metrics_csv)
-    k_path = os.path.join(run_dir, "K.npy")
-    if run.cache and os.path.exists(k_path) and not extract:
+    detection_marker = os.path.join(run_dir, "detection_complete.npy")
+    if run.cache and os.path.exists(detection_marker) and not extract:
         log.info("cache: reusing detection in %s", run_dir)
     else:
         detection_cfg = cfg.detection.model_dump()
-        intrinsics = cfg.geometry.intrinsics.model_dump()
-        stage("detection", detectores.run, detection_cfg, kept, run_dir, cfg.filters.lowe_ratio, intrinsics)
+        stage("detection", detectores.run, detection_cfg, kept, run_dir)
+
+    if cfg.matching.enabled:
+        matching_cfg = cfg.matching.model_dump()
+        filters_cfg = cfg.filters.model_dump()
+        stage("matching", matching.run, matching_cfg, filters_cfg, run_dir)
 
     report_cfg = cfg.report.model_dump()
     stage("report", relatorio.run, report_cfg, run_dir, ext.output_dir, artifacts_dir)
 
     # ponytail: later stages are stubs; replace the raise with their run() once implemented
-    stubs = (("matching", "src.matching"), ("geometry", "src.epipolar"), ("evaluation", "src.evaluation"))
+    stubs = (("geometry", "src.epipolar"), ("evaluation", "src.evaluation"))
     for block, package in stubs:
 
         block_cfg = getattr(cfg, block)
