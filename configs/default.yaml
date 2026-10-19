@@ -61,18 +61,20 @@ filters:
   lowe_ratio: 0.75            # lower = cleaner and fewer matches; 0.7 to 0.8 is usual (also used by detection)
   min_matches: 10             # pairs below it are success=False
 
-matching:                     # src/matching (not implemented yet)
-  enabled: false
+matching:                     # src/matching
+  enabled: true
   name: brute_force           # brute_force | flann; exact, FLANN mixes index error with detector quality
   strategy: sequential        # sequential (consecutive frames) | all_pairs (ablation)
   cross_check: false          # must stay false: knnMatch(k=2) for Lowe excludes crossCheck
+  reps: 30                    # timed runs per pair, after warmup
+  warmup: 2                   # untimed runs discarded before measurement
   flann:
     checks: 50
     float_index: {algorithm: 1, trees: 5}                                          # KDTREE
     binary_index: {algorithm: 6, table_number: 6, key_size: 12, multi_probe_level: 1}  # LSH
 
-geometry:                     # src/epipolar (not implemented yet)
-  enabled: false
+geometry:                     # src/epipolar (F/E and RANSAC)
+  enabled: true
   ransac:
     method: USAC_MAGSAC       # less sensitive to the hard threshold than RANSAC
     threshold_px: 1.0

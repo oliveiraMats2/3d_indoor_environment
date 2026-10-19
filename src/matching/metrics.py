@@ -53,6 +53,7 @@
 #   Partial logs (.npy), under results/<run_id>/matching/<detector>/<frameA>__<frameB>/:
 #     matches_raw.npy  (M, 3): queryIdx, trainIdx, distance
 #     matches_lowe.npy (K, 3)
+#   Geometry input under results/<run_id>/epipolar/<detector>/<frameA>__<frameB>/:
 #     inlier_mask.npy  (K,) bool
 #     times_ms.npy     (R,)
 #   Out: matching_metrics.csv under artifacts/<run_id>/.
@@ -76,5 +77,116 @@
 # ==============================================================================
 
 # >>> BEGIN IMPLEMENTATION >>>
+
+from __future__ import annotations
+
+import csv
+from pathlib import Path
+
+import numpy as np
+
+from src.matching.filters import select_inliers
+
+
+FIELDS = (
+    "detector",
+    "pair",
+    "raw_matches",
+    "filtered_matches",
+    "n_inliers",
+    "inlier_ratio",
+    "matching_score",
+    "success",
+    "match_time_ms_mean",
+    "match_time_ms_std",
+)
+
+
+def _safe_ratio(numerator: int, denominator: int) -> float:
+    return numerator / denominator if denominator else float("nan")
+
+
+def measure_pair(
+    raw_matches: np.ndarray,
+    matches_lowe: np.ndarray,
+    inlier_mask: np.ndarray,
+    times_ms: np.ndarray,
+    keypoints_first: int,
+    keypoints_second: int,
+) -> dict[str, float | int | bool]:
+    """Calculate matching quality and runtime metrics for one frame pair."""
+
+    inliers = select_inliers(matches_lowe, inlier_mask)
+    raw_count = len(raw_matches)
+    filtered_count = len(matches_lowe)
+    inlier_count = len(inliers)
+    minimum_keypoints = min(keypoints_first, keypoints_second)
+    times = np.asarray(times_ms, dtype=np.float64).reshape(-1)
+
+    return {
+        "raw_matches": raw_count,
+        "filtered_matches": filtered_count,
+        "n_inliers": inlier_count,
+        "inlier_ratio": _safe_ratio(inlier_count, filtered_count),
+        "matching_score": _safe_ratio(inlier_count, minimum_keypoints),
+        "success": inlier_count >= 8,
+        "match_time_ms_mean": float(times.mean()) if len(times) else float("nan"),
+        "match_time_ms_std": float(times.std()) if len(times) else float("nan"),
+    }
+
+
+def _load_keypoint_count(run_dir: Path, detector: str, frame: str) -> int:
+    path = run_dir / "detection" / detector / frame / "keypoints.npy"
+    return len(np.load(path))
+
+
+def _pair_rows(run_dir: Path) -> list[dict[str, object]]:
+    matching_root = run_dir / "matching"
+    if not matching_root.is_dir():
+        raise FileNotFoundError(f"matching results not found: {matching_root}")
+
+    rows = []
+    detector_dirs = sorted(path for path in matching_root.iterdir() if path.is_dir())
+    for detector_dir in detector_dirs:
+        pair_dirs = sorted(path for path in detector_dir.iterdir() if path.is_dir())
+        for pair_dir in pair_dirs:
+            geometry_dir = run_dir / "epipolar" / detector_dir.name / pair_dir.name
+            mask_path = geometry_dir / "inlier_mask.npy"
+            if not mask_path.exists():
+                continue
+
+            first, second = pair_dir.name.split("__", maxsplit=1)
+            measurements = measure_pair(
+                np.load(pair_dir / "matches_raw.npy"),
+                np.load(pair_dir / "matches_lowe.npy"),
+                np.load(mask_path),
+                np.load(pair_dir / "times_ms.npy"),
+                _load_keypoint_count(run_dir, detector_dir.name, first),
+                _load_keypoint_count(run_dir, detector_dir.name, second),
+            )
+            rows.append(
+                {
+                    "detector": detector_dir.name,
+                    "pair": pair_dir.name,
+                    **measurements,
+                }
+            )
+
+    return rows
+
+
+def run(run_dir: str, artifacts_dir: str) -> Path:
+    """Build matching_metrics.csv from saved NumPy artifacts."""
+
+    rows = _pair_rows(Path(run_dir))
+    output_dir = Path(artifacts_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "matching_metrics.csv"
+    with output_path.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    return output_path
 
 # <<< END IMPLEMENTATION <<<

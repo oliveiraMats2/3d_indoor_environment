@@ -70,4 +70,62 @@
 
 # >>> BEGIN IMPLEMENTATION >>>
 
+from dataclasses import dataclass
+from typing import Optional, Sequence
+
+import cv2
+import numpy as np
+
+
+@dataclass(frozen=True)
+class LoweResult:
+    matches: list[cv2.DMatch]
+    success: bool
+    reason: Optional[str] = None
+
+
+def run(cfg: dict, neighbors: Sequence[Sequence[cv2.DMatch]]) -> LoweResult:
+    """Apply Lowe's ratio test to the two nearest matches per descriptor."""
+
+    ratio = float(cfg["lowe_ratio"])
+    min_matches = int(cfg["min_matches"])
+
+    if not 0.0 < ratio < 1.0:
+        raise ValueError("lowe_ratio must be between 0 and 1")
+    if min_matches < 1:
+        raise ValueError("min_matches must be at least 1")
+
+    accepted = [
+        pair[0]
+        for pair in neighbors
+        if len(pair) >= 2 and pair[0].distance < ratio * pair[1].distance
+    ]
+
+    if len(accepted) < min_matches:
+        return LoweResult(
+            matches=accepted,
+            success=False,
+            reason="below_min_matches",
+        )
+
+    return LoweResult(matches=accepted, success=True)
+
+
+def select_inliers(matches_lowe: np.ndarray, inlier_mask: np.ndarray) -> np.ndarray:
+    """Select geometrically consistent matches using a RANSAC mask."""
+
+    matches = np.asarray(matches_lowe)
+    mask = np.asarray(inlier_mask).reshape(-1)
+
+    if matches.ndim != 2 or matches.shape[1] != 3:
+        raise ValueError("matches_lowe must have shape (n_matches, 3)")
+    if len(mask) != len(matches):
+        raise ValueError(
+            "inlier_mask must contain one value for every Lowe-filtered match"
+        )
+    if not np.isin(mask, (0, 1, False, True)).all():
+        raise ValueError("inlier_mask must contain only boolean or 0/1 values")
+
+    return matches[mask.astype(bool)]
+
 # <<< END IMPLEMENTATION <<<

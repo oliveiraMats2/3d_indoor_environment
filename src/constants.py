@@ -59,6 +59,8 @@ class Matching(Strict):
     name: Literal["brute_force", "flann"] = "brute_force"
     strategy: Literal["sequential", "all_pairs"] = "sequential"
     cross_check: Literal[False] = False  # knnMatch(k=2) for Lowe excludes crossCheck
+    reps: int = 30
+    warmup: int = 2
     flann: Flann = Flann()
 
 class Ransac(Strict): method: str = "USAC_MAGSAC"; threshold_px: float = 1.0; confidence: float = 0.999; max_iters: int = 5000
