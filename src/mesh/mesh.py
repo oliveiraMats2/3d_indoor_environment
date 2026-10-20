@@ -18,21 +18,21 @@
 
 # PROMPT COMPLEMENT
 # Stage: mesh (E2) + 3D scene export (X1).
-# Goal: Poisson surface from the cleaned cloud and a web/MeshLab scene with the camera path and frustums.
-# In:  clean/<source>/{points,colors}.npy (working units), scale/centers_cm.npy, sfm/{cam_R,K,image_names}.npy,
-#      one frame of cfg["extraction"]["output_dir"] (image size; falls back to 2*cx, 2*cy).
+# Goal: export ONE chosen mesh to every format and a web/MeshLab scene with the camera path and frustums.
+#       Poisson itself runs in src/mesh/poisson.py, hole closing in src/mesh/close_holes.py.
+# In:  mesh.input close_holes -> mesh/close_holes/pre_pre/mesh.ply (falls back to mesh/poisson/pre, WARNING);
+#      poisson -> mesh/poisson/pre/mesh.ply. Scene: clean/<source>/{points,colors}.npy (source as in
+#      poisson.pick_source), scale/centers_cm.npy, sfm/{cam_R,K,image_names}.npy, one frame of
+#      cfg["extraction"]["output_dir"] (image size; falls back to 2*cx, 2*cy).
 # Out: exports/meshlab/mesh.{ply,obj,stl,off}, exports/meshlab/scene.obj, exports/web/{mesh,scene}.glb,
-#      mesh/{vertices,faces,colors}.npy; artifacts_dir/mesh.csv (source, n_vertices, n_faces, poisson_depth, t_s).
-# YAML: mesh: {enabled, source: dense|sparse, poisson_depth, density_quantile, normal_knn, poisson_threads, frustum_cm,
-#       frustum_every, trajectory_cm}
-# Rules: source dense = first cfg["dense"]["methods"] entry with clean/<method>/points.npy, else clean/sparse
-#        (WARNING). Normals are oriented per point towards its NEAREST camera center (a point is seen from the
-#        camera side, so the normal must face it); this is more robust in a room than one mean center, which
-#        sits inside the room and flips walls behind it. *_cm sizes -> working units via stage_io.units_per_cm.
-#        poisson_threads: -1 (all cores) oversubscribes on 32 threads (~30x slower with colors); 8 is fast.
-#        Every written file is reloaded (trimesh for GLB, Open3D for OBJ/STL/OFF) as a check.
+#      mesh/{vertices,faces,colors}.npy; artifacts_dir/mesh.csv (source, input, n_vertices, n_faces,
+#      poisson_depth, t_s).
+# YAML: mesh: {enabled, input: close_holes|poisson, frustum_cm, frustum_every, trajectory_cm};
+#       poisson.{source, depth} (source of the scene cloud, depth logged in the CSV).
+# Rules: *_cm sizes -> working units via stage_io.units_per_cm. Every written file is reloaded (trimesh for
+#        GLB, Open3D for OBJ/STL/OFF) as a check.
 # >>> BEGIN IMPLEMENTATION >>>
-"""Poisson mesh of the cleaned cloud plus a GLB/OBJ scene with the camera trajectory and frustums."""
+"""Exports the chosen mesh (PLY/OBJ/STL/OFF/GLB) plus a GLB/OBJ scene with the camera trajectory and frustums."""
 import logging
 import time
 from pathlib import Path
@@ -43,79 +43,24 @@ import open3d as o3d
 import trimesh
 
 from src import stage_io
+from src.mesh import poisson
 
 log = logging.getLogger(__name__)
 
 FRUSTUM_RGBA = np.array([230, 60, 40, 255], dtype=np.uint8)
 TRAJECTORY_RGBA = np.array([40, 120, 230, 255], dtype=np.uint8)
 
-def pick_source(cfg: dict, run_dir: Path) -> str | None:
+def pick_input(cfg: dict, run_dir: Path) -> Path | None:
+    """mesh.input close_holes -> close_holes/pre_pre (else poisson/pre, WARNING); poisson -> poisson/pre."""
 
-    clean = run_dir / "clean"
-    if cfg["mesh"]["source"] == "dense":
-        for method in cfg.get("dense", {}).get("methods", []):
-            if (clean / method / "points.npy").exists():
-                return method
-        log.warning("mesh.source=dense but no clean/<method>/points.npy for %s: falling back to clean/sparse",
-                    cfg.get("dense", {}).get("methods", []))
+    pre = run_dir / "mesh" / "poisson" / "pre" / "mesh.ply"
+    if cfg["mesh"]["input"] == "close_holes":
+        path = run_dir / "mesh" / "close_holes" / "pre_pre" / "mesh.ply"
+        if path.exists():
+            return path
+        log.warning("mesh.input=close_holes but %s missing: falling back to %s", path, pre)
 
-    return "sparse" if (clean / "sparse" / "points.npy").exists() else None
-
-def load_centers(run_dir: Path) -> np.ndarray | None:
-
-    path = run_dir / "scale" / "centers_cm.npy"
-    if path.exists():
-        return np.load(path).reshape(-1, 3)
-
-    path = run_dir / "sfm" / "centers.npy"
-    if not path.exists():
-        return None
-
-    s, unit = stage_io.scale_info(run_dir)
-    log.warning("scale/centers_cm.npy missing: using sfm/centers.npy%s", " * s" if unit == "cm" else " (model units)")
-
-    return np.load(path).reshape(-1, 3) * (s if unit == "cm" else 1.0)
-
-def orient_to_nearest_camera(points: np.ndarray, normals: np.ndarray, centers: np.ndarray,
-                             chunk: int = 100_000) -> np.ndarray:
-    """Flip each normal so it points to its nearest camera center."""
-
-    out = normals.copy()
-    for i in range(0, len(points), chunk):
-        p = points[i:i + chunk]
-        d2 = ((p[:, None, :] - centers[None, :, :]) ** 2).sum(-1)
-        view = centers[d2.argmin(1)] - p
-        flip = (out[i:i + chunk] * view).sum(1) < 0
-        out[i:i + chunk][flip] *= -1
-
-    return out
-
-def poisson(points: np.ndarray, colors: np.ndarray | None, centers: np.ndarray | None,
-            mcfg: dict) -> o3d.geometry.TriangleMesh:
-
-    pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points.astype(np.float64)))
-    if colors is not None:
-        pcd.colors = o3d.utility.Vector3dVector(colors.astype(np.float64) / 255.0)
-    pcd.estimate_normals(o3d.geometry.KDTreeSearchParamKNN(knn=mcfg["normal_knn"]))
-
-    normals = np.asarray(pcd.normals)
-    if centers is not None and len(centers):
-        normals = orient_to_nearest_camera(points, normals, centers)
-    else:
-        log.warning("no camera centers: normals oriented by tangent-plane consistency only")
-        pcd.orient_normals_consistent_tangent_plane(mcfg["normal_knn"])
-        normals = np.asarray(pcd.normals)
-    pcd.normals = o3d.utility.Vector3dVector(normals)
-
-    mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=mcfg["poisson_depth"],
-                                                                             n_threads=mcfg["poisson_threads"])
-    densities = np.asarray(densities)
-    mesh.remove_vertices_by_mask(densities < np.quantile(densities, mcfg["density_quantile"]))
-    mesh.remove_unreferenced_vertices()
-    mesh.compute_vertex_normals()
-    mesh.triangle_normals = o3d.utility.Vector3dVector()
-
-    return mesh
+    return pre if pre.exists() else None
 
 def image_size(cfg: dict, run_dir: Path, K: np.ndarray) -> tuple[int, int]:
 
@@ -219,23 +164,28 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
 
     t0 = time.perf_counter()
     run_dir = Path(run_dir)
-    source = pick_source(cfg, run_dir)
-    if source is None:
-        log.warning("mesh: no clean/<source>/points.npy found, skipping")
+    in_path = pick_input(cfg, run_dir)
+    if in_path is None:
+        log.warning("mesh: no mesh/poisson/pre/mesh.ply (run the poisson stage), skipping")
         return None
-
-    points = np.load(run_dir / "clean" / source / "points.npy").reshape(-1, 3)
-    colors_path = run_dir / "clean" / source / "colors.npy"
-    colors = np.load(colors_path).reshape(-1, 3).astype(np.uint8) if colors_path.exists() else None
-    centers = load_centers(run_dir)
-    log.info("mesh source=%s points=%d", source, len(points))
-
-    mesh = poisson(points, colors, centers, mcfg)
+    mesh = o3d.io.read_triangle_mesh(str(in_path))
     vertices, faces = np.asarray(mesh.vertices), np.asarray(mesh.triangles)
     if len(faces) == 0:
-        log.warning("Poisson produced no faces (source=%s), nothing exported", source)
+        log.warning("mesh: %s has no faces, nothing exported", in_path)
         return None
+    mesh.compute_vertex_normals()
+    mesh.triangle_normals = o3d.utility.Vector3dVector()
     vcolors = (np.asarray(mesh.vertex_colors) * 255).round().astype(np.uint8) if mesh.has_vertex_colors() else None
+    input_rel = in_path.parent.relative_to(run_dir / "mesh").as_posix()
+    log.info("mesh input=%s vertices=%d faces=%d", input_rel, len(vertices), len(faces))
+
+    source = poisson.pick_source(cfg, run_dir, "pre")
+    if source is not None:
+        points, colors = poisson.load_cloud(run_dir, source, "pre")
+    else:
+        log.warning("mesh: no clean/<source>/points.npy for the scene: using the mesh vertices as points")
+        points, colors = vertices, vcolors
+    centers = poisson.load_centers(run_dir)
 
     out_npy = run_dir / "mesh"
     out_npy.mkdir(parents=True, exist_ok=True)
@@ -285,8 +235,8 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
     write_scene_obj(files["scene_obj"], points, colors, f_verts, f_tris, f_edges, cams, tube)
     verify(files)
 
-    row = {"source": source, "n_vertices": len(vertices), "n_faces": len(faces),
-           "poisson_depth": mcfg["poisson_depth"], "t_s": round(time.perf_counter() - t0, 3)}
+    row = {"source": source or "", "input": input_rel, "n_vertices": len(vertices), "n_faces": len(faces),
+           "poisson_depth": cfg["poisson"]["depth"], "t_s": round(time.perf_counter() - t0, 3)}
     stage_io.log_metrics(log, row)
     stage_io.upsert_csv(Path(artifacts_dir) / "mesh.csv", row)
 
@@ -299,35 +249,26 @@ if __name__ == "__main__":
     rng = np.random.default_rng(0)
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        run_dir, art, frames = tmp / "run", tmp / "art", tmp / "frames"
-        sphere = rng.normal(size=(6000, 3))
-        sphere = 100 * sphere / np.linalg.norm(sphere, axis=1, keepdims=True)
-        box = rng.uniform(-150, 150, size=(3000, 3))
-        box[np.arange(3000), rng.integers(0, 3, 3000)] = rng.choice([-150, 150], 3000)
-        pts = np.vstack([sphere, box])
-        (run_dir / "clean" / "sparse").mkdir(parents=True)
-        np.save(run_dir / "clean" / "sparse" / "points.npy", pts)
-        np.save(run_dir / "clean" / "sparse" / "colors.npy", rng.integers(0, 256, (len(pts), 3), dtype=np.uint8))
-        centers = np.array([[0, 0, 130.0], [40, 0, 125], [80, 10, 110]])
-        cam_R = np.stack([np.eye(3)] * 3)
-        (run_dir / "sfm").mkdir()
-        (run_dir / "scale").mkdir()
-        np.save(run_dir / "scale" / "scale.npy", np.array([1.0]))
-        np.save(run_dir / "scale" / "centers_cm.npy", centers)
-        np.save(run_dir / "sfm" / "cam_R.npy", cam_R)
-        np.save(run_dir / "sfm" / "K.npy", np.array([[500, 0, 320], [0, 500, 240], [0, 0, 1.0]]))
-        np.save(run_dir / "sfm" / "image_names.npy", np.array(["img_0000.png", "img_0001.png", "img_0002.png"]))
+        run_dir, pts, _ = poisson.synthetic_run(tmp, rng)
+        art, frames = tmp / "art", tmp / "frames"
         frames.mkdir()
         cv2.imwrite(str(frames / "img_0000.png"), np.zeros((480, 640, 3), np.uint8))
-        cfg = {"mesh": {"enabled": True, "source": "dense", "poisson_depth": 7, "density_quantile": 0.05,
-                        "normal_knn": 20, "poisson_threads": 8, "frustum_cm": 20, "frustum_every": 1, "trajectory_cm": 1.0},
+        cfg = {"poisson": {"enabled": True, "source": "dense", "variants": ["pre"], "depth": 7,
+                           "density_quantile": 0.05, "normal_knn": 20, "threads": 8},
+               "mesh": {"enabled": True, "input": "close_holes", "frustum_cm": 20, "frustum_every": 1,
+                        "trajectory_cm": 1.0},
                "dense": {"methods": ["patch_match", "openmvs"]}, "scale": {"provisional_extent_cm": 500},
                "extraction": {"output_dir": str(frames)}}
-        assert run(cfg, str(run_dir), str(art)) is not None
-        for rel in ["exports/meshlab/mesh.ply", "exports/meshlab/mesh.obj", "exports/meshlab/mesh.stl",
-                    "exports/meshlab/mesh.off", "exports/meshlab/scene.obj", "exports/web/mesh.glb",
-                    "exports/web/scene.glb", "mesh/vertices.npy", "mesh/faces.npy"]:
+        assert run(cfg, str(run_dir), str(art)) is None  # no Poisson mesh yet
+        assert poisson.run(cfg, str(run_dir), str(art)) is not None
+        assert run(cfg, str(run_dir), str(art)) is not None  # close_holes missing -> poisson/pre
+        files = ["exports/meshlab/mesh.ply", "exports/meshlab/mesh.obj", "exports/meshlab/mesh.stl",
+                 "exports/meshlab/mesh.off", "exports/meshlab/scene.obj", "exports/web/mesh.glb", "exports/web/scene.glb"]
+        for rel in files + ["mesh/vertices.npy", "mesh/faces.npy"]:
             assert (run_dir / rel).stat().st_size > 0, rel
+        for rel in files[:4]:
+            assert len(o3d.io.read_triangle_mesh(str(run_dir / rel)).triangles) > 0, rel
+        assert sum(1 for ln in open(run_dir / files[4]) if ln.startswith("v ")) > len(pts)
         glb = trimesh.load(str(run_dir / "exports/web/mesh.glb"))
         g = glb.geometry[next(iter(glb.geometry))] if hasattr(glb, "geometry") else glb
         assert len(g.faces) > 0 and g.visual.kind == "vertex"
@@ -335,6 +276,8 @@ if __name__ == "__main__":
         assert {"points", "frustums", "trajectory"} <= set(sc.geometry), set(sc.geometry)
         assert len(sc.geometry["points"].vertices) == len(pts)
         row = stage_io.read_csv(art / "mesh.csv")[0]
-        assert row["source"] == "sparse" and int(row["n_vertices"]) > 0 and int(row["n_faces"]) > 0, row
+        n_pre = len(np.load(run_dir / "mesh/poisson/pre/vertices.npy"))
+        assert row["source"] == "sparse" and row["input"] == "poisson/pre" and int(row["n_vertices"]) == n_pre, row
+        assert int(row["n_faces"]) > 0 and row["poisson_depth"] == "7", row
         print(row)
     print("OK")
