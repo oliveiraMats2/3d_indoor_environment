@@ -17,7 +17,7 @@
 # ╚══════════════════════════════════════════════════════════════════════════════════════╝
 
 """Shared I/O for the pipeline stages: CSV upsert, metric logging, PLY writing, workspace and scale."""
-import csv, logging
+import csv, hashlib, json, logging
 from pathlib import Path
 
 import numpy as np
@@ -80,6 +80,36 @@ def workspace(cfg: dict) -> Path:
 
     return Path(cfg["extraction"]["video"]).with_suffix("")
 
+TAG_EXCLUDED = ("rerun", "tag", "output_dir")  # cache/path flags: changing them keeps the same frames tag
+
+def extraction_tag(extraction: dict) -> str:
+    """First 8 hex chars of the SHA-1 of the extraction block (sorted-key JSON) without TAG_EXCLUDED."""
+
+    block = {k: v for k, v in extraction.items() if k not in TAG_EXCLUDED}
+    text = json.dumps(block, sort_keys=True, default=str)
+
+    return hashlib.sha1(text.encode()).hexdigest()[:8]
+
+def resolve_paths(cfg: dict, config_path) -> dict:
+    """Fills the derived paths of a validated cfg dict (in place, also returned): run.id = config stem,
+    extraction.tag = extraction_tag, null run.output_root / run.artifacts_root / extraction.output_dir ->
+    <ws>/results, <ws>/artifacts, <ws>/frames/<tag>. Explicit values win."""
+
+    ws = workspace(cfg)
+    run, ext = cfg["run"], cfg["extraction"]
+    run["id"] = run["id"] or Path(config_path).stem
+    run["output_root"] = run["output_root"] or str(ws / "results")
+    run["artifacts_root"] = run["artifacts_root"] or str(ws / "artifacts")
+    ext["tag"] = ext["tag"] or extraction_tag(ext)
+    ext["output_dir"] = ext["output_dir"] or str(ws / "frames" / ext["tag"])
+
+    return cfg
+
+def run_dirs(cfg: dict) -> tuple[Path, Path]:
+    """(run_dir, artifacts_dir) of a resolved cfg."""
+
+    return Path(cfg["run"]["output_root"]) / cfg["run"]["id"], Path(cfg["run"]["artifacts_root"]) / cfg["run"]["id"]
+
 def scale_info(run_dir) -> tuple[float, str]:
     """(s, unit): s = cm per model unit from scale/scale.npy; (nan, "model") when unknown."""
 
@@ -122,4 +152,12 @@ if __name__ == "__main__":
         assert scale_info(tmp)[1] == "model"
         assert abs(units_per_cm(tmp, np.array([[0, 0, 0], [10, 0, 0.0]]), 500.0) - 0.0192) < 1e-3
         assert workspace({"extraction": {"video": "video_preview.MOV"}}) == Path("video_preview")
+        c = resolve_paths({"run": {"id": None, "output_root": None, "artifacts_root": None},
+                           "extraction": {"video": "v.MOV", "rerun": False, "tag": None, "output_dir": None, "stride": 2}},
+                          "configs/default.yaml")
+        tag = c["extraction"]["tag"]
+        assert len(tag) == 8 and c["extraction"]["output_dir"] == f"v/frames/{tag}" and c["run"]["id"] == "default"
+        assert run_dirs(c) == (Path("v/results/default"), Path("v/artifacts/default"))
+        assert extraction_tag({**c["extraction"], "rerun": True, "output_dir": "x"}) == tag
+        assert extraction_tag({**c["extraction"], "stride": 3}) != tag
     print("OK")
