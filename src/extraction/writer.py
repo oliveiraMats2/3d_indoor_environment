@@ -32,7 +32,8 @@ def save_frame(path, frame, max_width, jpeg_quality):
 
 def save_csv(path, rows):
 
-    header = ["imagem", "frame_video", "tempo_s"]
+    # rows: selected frames (imagem set, kept=1) and blur/motion-dropped candidates (imagem "", kept=0)
+    header = ["imagem", "frame_video", "tempo_s", "blur_coef", "motion_ratio", "kept"]
 
     with open(path, "w", newline="") as fh:
 

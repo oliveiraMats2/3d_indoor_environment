@@ -62,3 +62,8 @@ def subsample(kept, n_max):
     positions = np.linspace(0, last_index, n_max)
 
     return [kept[int(i)] for i in positions]
+
+def consecutive_overlap(kept, overlap):
+    """Overlap estimate between each pair of consecutive selected frames."""
+
+    return [overlap(a, b) for a, b in zip(kept[:-1], kept[1:])]
