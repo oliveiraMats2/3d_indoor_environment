@@ -269,11 +269,9 @@ def frame_events(cfg: dict, artifacts_dir: Path) -> dict[int, tuple[str, str]]:
 
 def video_path(cfg: dict) -> Path:
 
-    p = Path(cfg["extraction"]["video"])
-    if not p.exists() and not p.is_absolute():
-        p = Path(__file__).resolve().parents[1] / p
+    p = Path(cfg["extraction"]["video"])  # main.py runs from the repo root: relative paths start there
 
-    return p
+    return stage_io.find_video(p) or p
 
 def kept_vs_discarded(cfg: dict, artifacts_dir: Path, out_path: Path) -> Path | None:
 

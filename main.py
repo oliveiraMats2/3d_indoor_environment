@@ -54,7 +54,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
     args = parser.parse_args()
-    path = args.config
+    path = os.path.abspath(args.config)  # the config path is relative to the caller's directory ...
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))  # ... every path inside the YAML to the repo root
     config_file = open(path)
     raw = yaml.safe_load(config_file) or {}
     cfg = Config.model_validate(raw)
@@ -103,6 +104,11 @@ def main():
             os.remove(path)
 
         extraction_cfg = ext.model_dump()
+        video_file = stage_io.find_video(ext.video)  # ext.video keeps naming <ws> and the tag
+        if video_file is None:
+            sys.exit(f"extraction.video {ext.video} not found (relative paths start at the repo root {os.getcwd()})")
+
+        extraction_cfg["video"] = str(video_file)
         frames = stage("extraction", extrair_quadros.run, extraction_cfg)
     else:
         log.info("reusing %d frames in %s (set extraction.rerun: true to extract again)", len(old_frames), ext.output_dir)

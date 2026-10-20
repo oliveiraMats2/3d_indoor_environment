@@ -94,6 +94,24 @@ def workspace(cfg: dict) -> Path:
 
     return Path(cfg["extraction"]["video"]).with_suffix("")
 
+def find_video(path) -> Path | None:
+    """path if it exists, else a file in the same folder whose name matches ignoring case
+    (video.MOV vs video.mov on case-sensitive Linux file systems); None when nothing matches."""
+
+    path = Path(path)
+    if path.is_file():
+        return path
+
+    folder = path.parent if str(path.parent) else Path(".")
+    if not folder.is_dir():
+        return None
+
+    match = sorted(p for p in folder.iterdir() if p.is_file() and p.name.lower() == path.name.lower())
+    if match:
+        log.warning("video %s not found, using %s (same name, different case)", path, match[0])
+
+    return match[0] if match else None
+
 TAG_EXCLUDED = ("rerun", "tag", "output_dir")  # cache/path flags: changing them keeps the same frames tag
 
 def extraction_tag(extraction: dict) -> str:
@@ -175,4 +193,7 @@ if __name__ == "__main__":
         assert run_dirs(c) == (Path("v/results/default"), Path("v/artifacts/default"))
         assert extraction_tag({**c["extraction"], "rerun": True, "output_dir": "x"}) == tag
         assert extraction_tag({**c["extraction"], "stride": 3}) != tag
+        (Path(tmp) / "clip.mov").write_bytes(b"x")
+        assert find_video(Path(tmp) / "clip.MOV") == Path(tmp) / "clip.mov" and find_video(Path(tmp) / "no.MOV") is None
+        assert find_video(Path(tmp) / "clip.mov") == Path(tmp) / "clip.mov" and find_video(Path(tmp) / "x/y.mov") is None
     print("OK")
