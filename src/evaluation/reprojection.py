@@ -158,15 +158,15 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> dict | None:
 
     return row
 
-def _colmap_check(model_dir: Path) -> float:
+def _colmap_check(model_dir: Path, colmap_bin: str = "colmap") -> float:
     """Read-only check against a COLMAP model: convert to TXT in a temp dir and return the mean error."""
 
     import shutil, subprocess, tempfile
-    if shutil.which("colmap") is None or not model_dir.exists():
+    if shutil.which(colmap_bin) is None or not model_dir.exists():
         return float("nan")
 
     with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run(["colmap", "model_converter", "--input_path", str(model_dir), "--output_path", tmp,
+        subprocess.run([colmap_bin, "model_converter", "--input_path", str(model_dir), "--output_path", tmp,
                         "--output_type", "TXT"], check=True, capture_output=True)
         lines = lambda f: [l.split() for l in open(Path(tmp) / f) if l.strip() and not l.startswith("#")]
         cam = lines("cameras.txt")[0]
@@ -237,8 +237,12 @@ if __name__ == "__main__":
         assert stage_io.read_csv(art / "evaluation.csv")[0]["n_dense"] == "123456"
         assert run({"evaluation": {"enabled": False}}, str(run_dir), str(art)) is None
 
-    if os.environ.get("REPROJ_COLMAP") == "1":  # optional check on the reference model colmap_gpu/
-        print(f"colmap_gpu/sparse/0 mean reprojection: {_colmap_check(Path('colmap_gpu/sparse/0')):.4f} px")
+    if os.environ.get("REPROJ_COLMAP") == "1":  # optional check on the reference model <repo>/colmap_gpu/
+        import yaml
+        repo = Path(__file__).resolve().parents[2]
+        exe = (yaml.safe_load(open(repo / "configs/default.yaml")).get("sfm") or {}).get("colmap_bin", "colmap")
+        model = repo / "colmap_gpu/sparse/0"
+        print(f"colmap_gpu/sparse/0 mean reprojection ({exe}): {_colmap_check(model, exe):.4f} px")
     print("OK")
 
 # <<< END IMPLEMENTATION <<<

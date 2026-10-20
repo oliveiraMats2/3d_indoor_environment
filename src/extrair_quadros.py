@@ -118,7 +118,7 @@ def run_all(cfg: dict) -> list[str]:
     blur.reset_discarded(out)
     orb = cv2.ORB_create(cfg["nfeatures"])
     idx, feats, nitidez, motion, pending = [], [], [], [], []
-    workers = os.cpu_count() or 1
+    workers = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)  # CPUs usable here (cgroups/taskset on Linux)
     total = -(-video.count(cfg["video"]) // cfg["stride"])  # ceil
     cand = lambda i: os.path.join(cand_dir, f"{i:06d}.{fmt}")
     with ThreadPoolExecutor(workers) as pool:  # single decode: analysis here, png/jpg encoding in the pool

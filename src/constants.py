@@ -108,7 +108,7 @@ class Scale(Strict):
 
 class Cleanup(Strict):
     enabled: bool = True; voxel_cm: float = 1.0; nb_neighbors: int = 20; std_ratio: float = 2.0
-    crop_percentiles: list[float] = [1, 99]; device: str = "CPU:0"
+    crop_percentiles: list[float] = [1, 99]; device: str = "auto"  # auto | CPU:0 | CUDA:0
 
 class Planes(Strict):
     enabled: bool = True; source: Literal["sparse", "patch_match", "openmvs"] = "sparse"

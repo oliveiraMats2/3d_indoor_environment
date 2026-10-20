@@ -47,8 +47,8 @@ from src import stage_io
 log = logging.getLogger(__name__)
 
 OPENMVS_TOOLS = ("InterfaceCOLMAP", "DensifyPointCloud")
-INSTALL_HINT = ("install OpenMVS 2.x (conda: `micromamba install -c conda-forge openmvs`, or build from "
-                "https://github.com/cdcseacave/openMVS/wiki/Building) and set dense.openmvs.bin_dir or PATH")
+INSTALL_HINT = ("OpenMVS has no conda-forge/brew package: build it from "
+                "https://github.com/cdcseacave/openMVS/wiki/Building and set dense.openmvs.bin_dir or PATH")
 
 PLY_TYPES = {"char": "i1", "int8": "i1", "uchar": "u1", "uint8": "u1", "short": "i2", "int16": "i2",
              "ushort": "u2", "uint16": "u2", "int": "i4", "int32": "i4", "uint": "u4", "uint32": "u4",

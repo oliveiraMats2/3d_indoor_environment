@@ -156,7 +156,7 @@ cleanup:                      # src/cloud/clean.py (sparse and each dense method
   nb_neighbors: 20            # statistical outlier removal neighbours
   std_ratio: 2.0              # drop points with mean distance > mean + std_ratio * std
   crop_percentiles: [1, 99]   # axis-aligned box removing extreme tails (floaters)
-  device: "CPU:0"             # CPU:0 | CUDA:0
+  device: auto                # auto = CUDA:0 when Open3D sees a CUDA GPU, else CPU:0 | CPU:0 | CUDA:0
 
 planes:                       # src/cloud/planes.py
   enabled: true

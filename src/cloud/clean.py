@@ -25,7 +25,7 @@
 # Out: <run_dir>/clean/<source>/{points,colors}.npy (working units, same frame as scale/points3d_cm.npy),
 #      <run_dir>/clean/<source>/cloud_clean.ply; row keyed by source in <artifacts_dir>/cleanup.csv
 #      (source, n_before, n_after_outlier, n_after_voxel, n_after_crop).
-# YAML: cleanup.{enabled, voxel_cm, nb_neighbors, std_ratio, crop_percentiles: [lo, hi], device: CPU:0|CUDA:0};
+# YAML: cleanup.{enabled, voxel_cm, nb_neighbors, std_ratio, crop_percentiles: [lo, hi], device: auto|CPU:0|CUDA:0};
 #       scale.provisional_extent_cm (via stage_io.units_per_cm when unit=model).
 # Rules: statistical outlier removal -> voxel_down_sample(voxel_cm * units_per_cm) -> axis-aligned crop at
 #   the per-axis crop_percentiles. Missing source -> WARNING and return None. device CUDA:0 uses the
@@ -126,6 +126,9 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str, source: str) -> Path | None
 
     voxel = c["voxel_cm"] * stage_io.units_per_cm(run_dir, points, room_extent_cm=cfg["scale"]["provisional_extent_cm"])
     device = c.get("device", "CPU:0")
+    if device == "auto":  # CUDA:0 when this Open3D build sees a CUDA GPU (Linux CUDA wheels), else CPU
+        device = "CUDA:0" if o3d.core.cuda.is_available() else "CPU:0"
+        log.info("cleanup: device auto -> %s", device)
     args = (points, colors, c["nb_neighbors"], c["std_ratio"], voxel)
 
     result = None
@@ -196,8 +199,11 @@ if __name__ == "__main__":
         p2 = np.load(out2 / "points.npy")
         assert p2[:, 0].max() > 300, "dense not scaled to cm"
 
+        out3 = run({**cfg, "cleanup": {**cfg["cleanup"], "device": "auto"}}, run_dir, art, "sparse")  # CUDA:0 or CPU:0
+        assert np.abs(np.load(out3 / "points.npy")).max() < 1000
+
         rows = stage_io.read_csv(art / "cleanup.csv")
-        assert [r["source"] for r in rows] == ["sparse", "patch_match"]
+        assert [r["source"] for r in rows] == ["patch_match", "sparse"]
         for r in rows:
             n = [int(r[k]) for k in ("n_before", "n_after_outlier", "n_after_voxel", "n_after_crop")]
             assert n[0] - n[1] >= 200 and n[2] < n[1] and n[3] < n[2], n
