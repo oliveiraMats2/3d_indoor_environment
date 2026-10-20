@@ -1,6 +1,26 @@
+__pycache__/
+.vscode/
+.venv/
+*.egg-info/
+
+# workspaces: video_<name>.MOV and its outputs video_<name>/{frames,results,artifacts}
+video_*
+
+# videos
+videos/
+*.MOV
+*.mov
+*.mp4
+
+# COLMAP workspaces and outputs
+colmap_*/
+*.db
+*.db-shm
+*.db-wal
+*.ply
+
+# legacy root outputs (remove these lines after deleting the old folders)
 3d_image_video*
 frames/
 artifacts/
 results/
-__pycache__/
-.vscode/
