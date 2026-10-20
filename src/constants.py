@@ -133,9 +133,17 @@ class Dense(Strict):
 
 class DenseCompare(Strict): enabled: bool = True
 
+class Poisson(Strict):
+    enabled: bool = True; source: Literal["dense", "sparse"] = "dense"
+    variants: list[Literal["pre", "raw"]] = ["pre", "raw"]; depth: int = 10; density_quantile: float = 0.05
+    normal_knn: int = 30; threads: int = 8
+
+class CloseHoles(Strict):
+    enabled: bool = True; variants: list[Literal["pre", "raw"]] = ["pre", "raw"]; max_hole_size: int = 30
+    min_component_frac: float = 0.01; self_intersection: bool = True
+
 class Mesh(Strict):
-    enabled: bool = True; source: Literal["dense", "sparse"] = "dense"; poisson_depth: int = 10
-    density_quantile: float = 0.05; normal_knn: int = 30; poisson_threads: int = 8
+    enabled: bool = True; input: Literal["close_holes", "poisson"] = "close_holes"
     frustum_cm: float = 20; frustum_every: int = 5; trajectory_cm: float = 1.0
 
 class Export(Strict):
@@ -158,5 +166,6 @@ class Config(Strict):
     matching: Matching = Matching(); geometry: Geometry = Geometry(); visualize: Visualize = Visualize()
     evaluation: Evaluation = Evaluation(); sfm: Sfm = Sfm(); scale: Scale = Scale(); cleanup: Cleanup = Cleanup()
     planes: Planes = Planes(); floorplan: Floorplan = Floorplan(); dense: Dense = Dense()
-    dense_compare: DenseCompare = DenseCompare(); mesh: Mesh = Mesh(); export: Export = Export()
+    dense_compare: DenseCompare = DenseCompare(); poisson: Poisson = Poisson(); close_holes: CloseHoles = CloseHoles()
+    mesh: Mesh = Mesh(); export: Export = Export()
     viewer: Viewer = Viewer(); videos: Videos = Videos()

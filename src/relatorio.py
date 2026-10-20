@@ -269,13 +269,16 @@ REPORT_CSVS = [("extraction_metrics.csv", "extraction"), ("frame_quality_metrics
                ("summary.csv", "report"), ("epipolar_metrics.csv", "two_view"), ("sfm_metrics.csv", "sfm"),
                ("scale.csv", "scale"), ("cleanup.csv", "cleanup"), ("planes.csv", "planes"),
                ("wall_angles.csv", "planes"), ("floorplan.csv", "floorplan"), ("dense_metrics.csv", "dense"),
-               ("dense_compare.csv", "dense_compare"), ("mesh.csv", "mesh"), ("evaluation.csv", "evaluation"),
+               ("dense_compare.csv", "dense_compare"), ("poisson.csv", "poisson"), ("close_holes.csv", "close_holes"),
+               ("mesh.csv", "mesh"), ("evaluation.csv", "evaluation"),
                ("metric_error.csv", "evaluation"), ("loop_drift.csv", "evaluation"),
                ("hard_regions.csv", "evaluation"), ("ablation.csv", "ablation"), ("videos.csv", "videos")]
 REPORT_EXPORTS = [("exports/colmap/project.ini", "sfm"), ("exports/meshlab/project.mlp", "export"),
                   ("exports/web/scene.glb", "mesh"), ("exports/meshlab/mesh.ply", "mesh"),
                   ("exports/meshlab/mesh.obj", "mesh"), ("exports/meshlab/mesh.stl", "mesh"),
                   ("exports/meshlab/mesh.off", "mesh"), ("exports/web/mesh.glb", "mesh")]
+REPORT_EXPORT_GLOBS = [("exports/meshlab/poisson_*.ply", "poisson"),  # one file per variant (YAML variants)
+                       ("exports/meshlab/close_holes_*.ply", "close_holes")]
 REPORT_FIGURES = [("keypoints", "*.jpg", "report"), ("registration", "*.jpg", "report"),
                   ("matching", "*", "matching"), ("epilines", "*.png", "two_view")]
 
@@ -367,6 +370,13 @@ def write_report(metrics_dir: str, run_dir: str, max_rows: int, max_figures: int
             out.append("- " + missing(name, stage))
             n_missing += 1
 
+    for pattern, stage in REPORT_EXPORT_GLOBS:
+        files = sorted(run.glob(pattern))
+        out += [f"- {rel_path(f, ws)}" for f in files]
+        if not files:
+            out.append("- " + missing(pattern, stage))
+            n_missing += 1
+
     out += ["", "## videos", ""]
     rows = stage_io.read_csv(met / "videos.csv")
     paths = [v for r in rows for v in r.values() if v and str(v).endswith(".mp4")]
@@ -403,6 +413,9 @@ if __name__ == "__main__":
         (run_dir / "figures" / "floorplan.png").write_bytes(b"0")
         (run_dir / "exports" / "colmap").mkdir(parents=True)
         (run_dir / "exports" / "colmap" / "project.ini").write_text("")
+        (run_dir / "exports" / "meshlab").mkdir(parents=True)
+        (run_dir / "exports" / "meshlab" / "poisson_pre.ply").write_bytes(b"0")
+        stage_io.upsert_csv(met / "poisson.csv", {"variant": "pre", "n_faces": 10}, "variant")
 
         text = write_report(str(met), str(run_dir), max_rows=3, max_figures=2).read_text()
         assert "| n_images | reproj_px |" in text and "| 30 | 0.8123 |" in text
@@ -412,5 +425,9 @@ if __name__ == "__main__":
         assert "- results/x/figures/floorplan.png" in text and "- results/x/exports/colmap/project.ini" in text
         assert "FALTANDO: exports/web/mesh.glb (estágio mesh desligado ou falhou)" in text
         assert "- results/x/videos/navigation_sparse_45s.mp4" in text
-        assert text.count("FALTANDO") == 18 + 4 + 7, text.count("FALTANDO")
+        assert "- results/x/exports/meshlab/poisson_pre.ply" in text and "| pre | 10 |" in text
+        assert "FALTANDO: exports/meshlab/close_holes_*.ply (estágio close_holes desligado ou falhou)" in text
+        assert "FALTANDO: close_holes.csv (estágio close_holes desligado ou falhou)" in text
+        assert text.index("dense_compare.csv") < text.index("poisson.csv") < text.index("close_holes.csv") < text.index("mesh.csv")
+        assert text.count("FALTANDO") == 18 + 4 + 7 + 1 + 1, text.count("FALTANDO")
     print("OK")

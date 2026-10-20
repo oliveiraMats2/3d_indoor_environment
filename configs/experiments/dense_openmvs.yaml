@@ -203,13 +203,25 @@ dense:                        # src/dense (patch_match.py, openmvs.py)
 dense_compare:                # src/dense/compare.py
   enabled: true
 
-mesh:                         # src/mesh/mesh.py
+poisson:                      # src/mesh/poisson.py (Open3D)
   enabled: true
-  source: dense               # dense = first of dense.methods with a clean cloud (else sparse) | sparse
-  poisson_depth: 10           # Poisson octree depth
-  density_quantile: 0.05      # drop vertices with density below this quantile
-  normal_knn: 30              # neighbours to estimate normals
-  poisson_threads: 8          # -1 = all cores
+  source: dense               # dense -> first dense.methods with output, else sparse (WARNING) | sparse
+  variants: [pre, raw]        # pre = cleaned cloud (cleanup stage) | raw = same cloud without cleanup
+  depth: 10                   # octree depth (higher = finer, slower)
+  density_quantile: 0.05      # drop vertices with Poisson density below this quantile
+  normal_knn: 30              # neighbours for normal estimation
+  threads: 8                  # Poisson threads (-1 = all cores; much slower on many-core machines)
+
+close_holes:                  # src/mesh/close_holes.py (pymeshlab, MeshLab "Close Holes"; no pymeshlab -> WARNING, skipped)
+  enabled: true
+  variants: [pre, raw]        # pre = repair (dedupe, non-manifold, small pieces) then close | raw = close directly
+  max_hole_size: 30           # max hole size in boundary edges (MeshLab maxholesize)
+  min_component_frac: 0.01    # pre: remove isolated pieces smaller than this fraction of the bbox diagonal
+  self_intersection: true     # forbid patches that self-intersect (MeshLab selfintersection)
+
+mesh:                         # src/mesh/mesh.py (formats + scene of ONE chosen mesh)
+  enabled: true
+  input: close_holes          # close_holes (pre_pre) | poisson (pre): mesh exported to PLY/OBJ/STL/OFF/GLB
   frustum_cm: 20              # camera pyramid depth
   frustum_every: 5            # draw 1 camera every N
   trajectory_cm: 1.0          # trajectory tube diameter

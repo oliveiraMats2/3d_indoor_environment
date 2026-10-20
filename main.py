@@ -34,7 +34,7 @@ from src.dense import compare as dense_compare, openmvs, patch_match
 from src.epipolar import two_view
 from src.evaluation import ablation, hard_regions, loop_drift, metric_error, reprojection
 from src.export import meshlab
-from src.mesh import mesh
+from src.mesh import close_holes, mesh, poisson
 from src.sfm import colmap, convert, scale
 
 log = logging.getLogger("main")
@@ -184,6 +184,12 @@ def main():
 
     if cfg.dense_compare.enabled:
         stage("dense_compare", dense_compare.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.poisson.enabled:
+        stage("poisson", poisson.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.close_holes.enabled:
+        stage("close_holes", close_holes.run, full_cfg, run_dir, artifacts_dir)
 
     if cfg.mesh.enabled:
         stage("mesh", mesh.run, full_cfg, run_dir, artifacts_dir)
