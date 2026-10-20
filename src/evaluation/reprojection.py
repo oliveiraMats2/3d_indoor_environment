@@ -192,7 +192,7 @@ def _colmap_check(model_dir: Path) -> float:
     return float(np.nanmean(err))  # per observation; COLMAP's own figure is the mean of per-point errors
 
 if __name__ == "__main__":
-    import sys, tempfile, time
+    import os, tempfile, time
     import cv2
 
     rng = np.random.default_rng(0)
@@ -237,7 +237,7 @@ if __name__ == "__main__":
         assert stage_io.read_csv(art / "evaluation.csv")[0]["n_dense"] == "123456"
         assert run({"evaluation": {"enabled": False}}, str(run_dir), str(art)) is None
 
-    if "--colmap" in sys.argv:
+    if os.environ.get("REPROJ_COLMAP") == "1":  # optional check on the reference model colmap_gpu/
         print(f"colmap_gpu/sparse/0 mean reprojection: {_colmap_check(Path('colmap_gpu/sparse/0')):.4f} px")
     print("OK")
 

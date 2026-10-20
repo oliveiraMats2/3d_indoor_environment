@@ -336,7 +336,7 @@ DEFAULTS = {"enabled": True, "rerun": False, "colmap_bin": "colmap", "camera_mod
             "ba_global_max_num_iterations": None, "ba_global_max_refinements": None, "project_quality": "high"}
 
 if __name__ == "__main__":
-    import sys
+    import os
     import tempfile
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -425,9 +425,9 @@ if __name__ == "__main__":
         # missing binary -> None
         assert run({"sfm": {**DEFAULTS, "colmap_bin": "no_such_colmap_bin"}}, str(tmp), str(art)) is None
 
-        # optional real smoke run on 8 frames from <repo>/frames (sequential + incremental, GPU)
+        # optional real smoke run (env SFM_SMOKE=1) on 8 frames from <repo>/frames (sequential + incremental, GPU)
         src = Path(__file__).resolve().parents[2] / "frames"
-        if "--smoke" in sys.argv and shutil.which("colmap") and len(list_frames(src)) >= 8:
+        if os.environ.get("SFM_SMOKE") == "1" and shutil.which("colmap") and len(list_frames(src)) >= 8:
             fdir = tmp / "frames"
             fdir.mkdir()
             for f in list_frames(src)[:8]:
