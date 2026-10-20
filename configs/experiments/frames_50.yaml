@@ -1,0 +1,253 @@
+# =============================================================================
+# frames_50
+#   axis     : extraction.max_frames
+#   variant  : 50
+#   output   : video_preview/results/frames_50/
+#
+# Full copy of configs/default.yaml, with ONE SINGLE line changed (marked
+# with 'axis of this copy'). No inheritance: this file reads on its own.
+# =============================================================================
+# Single default experiment: one YAML = one experiment. Every key is validated by
+# main.py and unknown keys are rejected. Run: python main.py --config configs/default.yaml
+
+# Layout (<ws> = extraction.video without extension): <ws>/frames/<tag>/, <ws>/results/<id>/, <ws>/artifacts/<id>/
+
+run:
+  id: null                    # null = uses THIS FILE'S NAME; outputs go to <ws>/results/<id>/
+  output_root: null           # null = <ws>/results
+  artifacts_root: null        # null = <ws>/artifacts (CSVs and report.md)
+  seed: 42
+  log_level: INFO
+  overwrite: false
+  cache: true
+
+extraction:                   # src/extrair_quadros.py
+  rerun: false                # true = extract again (old img_* and selecao.csv in output_dir are deleted); false = reuse frames if selecao.csv exists
+  video: video_preview.MOV
+  output_dir: null            # null = <ws>/frames/<tag>; shared by every experiment with the same tag
+  tag: null                   # null = SHA-1[:8] of this block without rerun/tag/output_dir (same params -> same frames)
+  min_frames: 100
+  max_frames: 50 # axis of this copy
+  overlap: 0.70               # initial overlap target (0.60 to 0.80)
+  overlap_min: 0.60
+  overlap_max: 0.80
+  overlap_step: 0.025
+  max_adjust_iters: 12
+  stride: 2                   # analyze 1 of every N video frames
+  analysis_width: 640
+  nfeatures: 1000             # ORB features used only to estimate overlap
+  lowe_ratio: 0.75
+  min_good_matches: 15
+  ransac_threshold_px: 3.0
+  min_inliers: 12
+  sharp_percentile: 25        # drop the blurriest 25% of sampled frames before selection
+  max_width: 1920             # max width of saved frames
+  image_format: png           # png = lossless; jpg allowed
+  jpeg_quality: 95
+  blur:                       # src/extraction/blur.py
+    enabled: true
+    coef_min: 0.5             # drop if lapvar / rolling median < coef_min
+    motion_ratio_max: 4.0     # drop if structure-tensor lmax/lmin > this (motion blur)
+    keep_for_sfm_only: false  # true = keep flagged frames for SfM and list them in mvs_exclude.txt
+    window: 9                 # neighbouring sampled frames in the rolling median
+    discard_width: 640        # width of the jpg copies in discarded/{blur,motion}/
+    discard_jpeg_quality: 90
+
+frame_quality:                # src/frame_quality.py
+  resize_width: 640
+  blur:
+    laplacian_var_min: 100.0
+    relative_to_median: 0.5
+  exposure:
+    mean_min: 40
+    mean_max: 215
+    clipped_max_frac: 0.05    # fraction of pixels <= 5 or >= 250
+  contrast:
+    std_min: 20.0
+  texture:
+    min_keypoints: 300        # FAST threshold 20
+    fast_threshold: 20
+
+detection:                    # src/detectores.py
+  methods: [sift, orb, akaze]
+  nfeatures: 5000
+  reps: 30
+  warmup: 2
+
+report:                       # src/relatorio.py
+  max_figures: 5
+  max_rows: 20                # rows per table in report.md
+
+filters:
+  lowe_ratio: 0.75            # lower = cleaner and fewer matches; 0.7 to 0.8 is usual (also used by detection)
+  min_matches: 10             # pairs below it are success=False
+
+matching:                     # src/matching
+  enabled: true
+  name: brute_force           # brute_force | flann; exact, FLANN mixes index error with detector quality
+  strategy: sequential        # sequential (consecutive frames) | all_pairs (ablation)
+  cross_check: false          # must stay false: knnMatch(k=2) for Lowe excludes crossCheck
+  reps: 30                    # timed runs per pair, after warmup
+  warmup: 2                   # untimed runs discarded before measurement
+  flann:
+    checks: 50
+    float_index: {algorithm: 1, trees: 5}                                          # KDTREE
+    binary_index: {algorithm: 6, table_number: 6, key_size: 12, multi_probe_level: 1}  # LSH
+
+geometry:                     # src/epipolar (F/E and RANSAC)
+  enabled: true
+  ransac:
+    method: USAC_MAGSAC       # less sensitive to the hard threshold than RANSAC
+    threshold_px: 1.0
+    confidence: 0.999
+    max_iters: 5000
+  # COLMAP OPENCV calibration of colmap_gpu/ (same video, 1920x1080); used only by the two-view stages
+  # (and by sfm.intrinsics: fixed). null fx/fy -> max(w, h); null cx/cy -> w/2, h/2
+  intrinsics: {fx: 1476.32, fy: 1471.86, cx: 960, cy: 540}
+
+visualize:
+  matches:
+    max_lines: 100
+    dpi: 150
+    format: png
+  epilines:
+    n_lines: 20
+    dpi: 150
+
+sfm:                          # src/sfm/colmap.py + convert.py (COLMAP 4.x CLI)
+  enabled: true
+  rerun: false                # false + existing sparse/0/images.bin -> reuse the model
+  colmap_bin: colmap          # not found -> WARNING, stage skipped
+  camera_model: OPENCV        # fx,fy,cx,cy,k1,k2,p1,p2
+  single_camera: true         # one shared camera (same phone/zoom)
+  intrinsics: estimate        # estimate: COLMAP estimates | fixed: geometry.intrinsics + fixed_dist, not refined in BA
+  fixed_dist: [0, 0, 0, 0]    # k1,k2,p1,p2 used only with intrinsics: fixed
+  matcher: sequential         # sequential | exhaustive
+  sequential_overlap: 10      # neighbours matched per frame (sequential)
+  loop_detection: false       # true needs vocab_tree
+  vocab_tree: "https://github.com/colmap/colmap/releases/download/3.11.1/vocab_tree_faiss_flickr100K_words256K.bin;vocab_tree_faiss_flickr100K_words256K.bin;96ca8ec8ea60b1f73465aaf2c401fd3b3ca75cdba2d3c50d6a2f6f760f275ddc"  # path or COLMAP url;name;sha256 (downloaded and cached by COLMAP), used only with loop_detection
+  mapper: incremental         # incremental (mapper) | global (global_mapper, GLOMAP)
+  use_gpu: true               # SIFT extraction/matching on GPU
+  gpu_index: "0"
+  ba_use_gpu: false           # BA on Ceres CUDA
+  max_image_size: 1920        # max side for SIFT extraction
+  max_num_features: 8192
+  min_num_matches: 15         # min matches per pair for the mapper
+  multiple_models: true       # allow several submodels; the largest goes to sparse/0
+  ba_global_max_num_iterations: null  # null = COLMAP default (incremental only)
+  ba_global_max_refinements: null     # null = COLMAP default (incremental only)
+  project_quality: high       # project_generator --quality: low|medium|high|extreme
+
+scale:                        # src/sfm/scale.py
+  enabled: true
+  method: aruco               # aruco | manual
+  aruco_dict: DICT_4X4_50     # cv2.aruco.DICT_* name
+  marker_cm: null             # real marker side in cm; null -> scale unknown (unit=model)
+  min_parallax_deg: 1.0       # frame pairs with less parallax are ignored when triangulating the marker
+  manual_pairs: []            # [{length_cm, p: [{image,x,y},{image,x,y}], q: [{image,x,y},{image,x,y}]}]
+  provisional_extent_cm: 500  # only used to turn *_cm thresholds into model units when unit=model
+
+cleanup:                      # src/cloud/clean.py (sparse and each dense method)
+  enabled: true
+  voxel_cm: 1.0               # voxel downsampling side
+  nb_neighbors: 20            # statistical outlier removal neighbours
+  std_ratio: 2.0              # drop points with mean distance > mean + std_ratio * std
+  crop_percentiles: [1, 99]   # axis-aligned box removing extreme tails (floaters)
+  device: "CPU:0"             # CPU:0 | CUDA:0
+
+planes:                       # src/cloud/planes.py
+  enabled: true
+  source: sparse              # sparse | patch_match | openmvs -> clean/<source>/points.npy
+  distance_cm: 2.0            # RANSAC inlier threshold
+  ransac_n: 3
+  iterations: 2000
+  max_walls: 4
+  min_inlier_frac: 0.02       # min plane inliers / total points (also stop criterion)
+  angle_tol_deg: 15           # tolerance for horizontal / vertical planes
+  max_planes: 10              # max RANSAC rounds
+
+floorplan:                    # src/cloud/floorplan.py
+  enabled: true
+  cell_cm: 5.0                # grid cell side
+  dpi: 150
+  fig_inches: 8.0             # longest side of the figure in inches
+  extent_percentiles: [1, 99] # robust percentiles for the room rectangle sides
+
+dense:                        # src/dense (patch_match.py, openmvs.py)
+  enabled: true
+  rerun: false                # false: reuse dense/<method>/fused.ply
+  methods: [patch_match, openmvs]  # openmvs is skipped with a WARNING when not installed
+  max_image_size: 1600        # longest side (px); VRAM and time grow ~side^2; 640 = quick test
+  gpu_index: "0"              # "-1" = all GPUs
+  patch_match:
+    num_iterations: 5
+    window_radius: 5          # NCC window (2r+1)^2
+    num_samples: 15           # Monte Carlo source-view samples per pixel
+    num_src_images: 20        # source images per reference
+    geom_consistency: true    # photometric + geometric pass (~2x time, much less noise)
+    cache_size: 32            # GB of CPU RAM cache
+  fusion:
+    min_num_pixels: 5         # min consistent pixels per point
+    max_reproj_error: 2.0     # px
+    max_depth_error: 0.01     # relative
+    cache_size: 32            # GB
+  openmvs:
+    bin_dir: null             # folder with InterfaceCOLMAP/DensifyPointCloud; null = PATH
+    resolution_level: 1       # 0 = full resolution, 1 = half, ...
+    number_views: 5           # neighbour views per depth map (0 = all)
+    max_threads: 0            # 0 = all cores
+
+dense_compare:                # src/dense/compare.py
+  enabled: true
+
+mesh:                         # src/mesh/mesh.py
+  enabled: true
+  source: dense               # dense = first of dense.methods with a clean cloud (else sparse) | sparse
+  poisson_depth: 10           # Poisson octree depth
+  density_quantile: 0.05      # drop vertices with density below this quantile
+  normal_knn: 30              # neighbours to estimate normals
+  poisson_threads: 8          # -1 = all cores
+  frustum_cm: 20              # camera pyramid depth
+  frustum_every: 5            # draw 1 camera every N
+  trajectory_cm: 1.0          # trajectory tube diameter
+
+export:                       # src/export/meshlab.py (MeshLab project + filter script)
+  enabled: true
+  normals_k: 10               # neighbours for normals
+  normals_smooth_iter: 0
+  poisson_depth: 10           # Screened Poisson octree depth
+  poisson_samples_per_node: 1.5  # 1-5 clean cloud, 15-20 noisy cloud
+  poisson_point_weight: 4.0   # 0 = classic Poisson
+  isolated_diameter_frac: 0.1 # remove pieces with diameter < frac * bbox diagonal
+
+viewer:                       # src/viewer.py (python view.py --config <this file>)
+  cloud: sparse               # sparse | patch_match | openmvs | mesh
+  record: false               # true: record the orbit to mp4; false: interactive window
+  seconds: 45
+  fps: 30
+  offscreen: false            # true: OffscreenRenderer; false: hidden Open3D window
+  width: 1280
+  height: 720
+  frustum_cm: 20
+  point_size: 2.0
+  fov_deg: 60.0               # vertical FOV of the orbit camera
+  orbit_radius_factor: 1.5    # orbit radius = factor * robust half-diagonal of the scene
+  orbit_elevation_deg: 30.0
+  background: [1.0, 1.0, 1.0]
+
+videos:                       # src/videos.py
+  enabled: true
+  topdown_fps: 10             # fps of trajectory_topdown.mp4 (1 frame per camera)
+  kept_vs_discarded: true     # writes frames_kept_vs_discarded.mp4
+  width: 960                  # output width (height proportional, even)
+  codec: mp4v                 # cv2.VideoWriter fourcc
+
+evaluation:                   # src/evaluation
+  enabled: true
+  measured_cm: []             # [{name: room_width|room_length|ceiling_height, value_cm}] measured by hand
+  ablation_runs: []           # run ids to compare (configs/experiments/ablation.yaml)
+  loop_closed: null           # does the video start and end at the same spot? null | true | false
+  hard_regions: true          # smooth vs textured wall reprojection (needs planes)
+  texture_radius_px: 30       # radius of local keypoint density
+  texture_split_quantile: 0.5 # texture quantile splitting smooth_wall / textured_wall
+  inlier_px: 2.0              # point is inlier if its mean reprojection error < inlier_px
