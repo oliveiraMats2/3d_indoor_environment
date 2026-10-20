@@ -61,6 +61,7 @@ import numpy as np
 from tqdm import tqdm
 
 from src import stage_io
+from src.extraction import video
 
 log = logging.getLogger(__name__)
 
@@ -291,7 +292,7 @@ def kept_vs_discarded(cfg: dict, artifacts_dir: Path, out_path: Path) -> Path | 
 
     vc = cfg["videos"]
     src = video_path(cfg)
-    cap = cv2.VideoCapture(str(src))
+    cap = video.open_capture(src)  # FFmpeg backend, same decoding as the extraction
     if not cap.isOpened():
         log.warning("videos: cannot open %s, frames_kept_vs_discarded skipped", src)
         return None

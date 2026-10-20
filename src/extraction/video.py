@@ -18,9 +18,20 @@
 """Video reading: stride sampling, reading by index and fps."""
 import cv2
 
+def open_capture(video) -> cv2.VideoCapture:
+    """FFmpeg backend first: the same .MOV decoding (rotation, frame count) on Linux and macOS; falls back
+    to OpenCV's default backend when this build has no FFmpeg."""
+
+    cap = cv2.VideoCapture(str(video), cv2.CAP_FFMPEG)
+    if not cap.isOpened():
+        cap.release()
+        cap = cv2.VideoCapture(str(video))
+
+    return cap
+
 def fps(video):
 
-    cap = cv2.VideoCapture(video)
+    cap = open_capture(video)
     value = cap.get(cv2.CAP_PROP_FPS)
     cap.release()
 
@@ -28,7 +39,7 @@ def fps(video):
 
 def count(video):
 
-    cap = cv2.VideoCapture(video)
+    cap = open_capture(video)
     value = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
 
@@ -57,7 +68,7 @@ def read(video, indices):
 
 def _frames(video):
 
-    cap = cv2.VideoCapture(video)
+    cap = open_capture(video)
     i = 0
 
     while True:
