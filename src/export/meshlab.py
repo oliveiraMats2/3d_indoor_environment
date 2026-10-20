@@ -21,8 +21,11 @@
 # Goal: gather every cloud/mesh of the run in one folder MeshLab opens as a project, plus a filter script
 #   (normals -> Screened Poisson -> remove isolated pieces -> remove unreferenced vertices).
 # In:  exports/colmap/sparse.ply, dense/<method>/fused.ply, clean/<source>/cloud_clean.ply,
+#      exports/meshlab/{poisson_*.ply, close_holes_*.ply} (poisson / close_holes stages),
 #      exports/meshlab/mesh.ply (mesh stage). Out: exports/meshlab/{sparse.ply, fused_<method>.ply,
 #      cloud_clean_<source>.ply, project.mlp, process.mlx}. Missing inputs are skipped with INFO.
+#      Poisson threads in process.mlx = poisson.threads (fallback PORTABLE_THREADS when <= 0 or absent),
+#      never the machine core count, so the script is the same on every machine.
 # YAML: export: {enabled, normals_k, normals_smooth_iter, poisson_depth, poisson_samples_per_node,
 #      poisson_point_weight, isolated_diameter_frac}
 # Rules: relative filenames in project.mlp; XML format and filter names/Param types match pymeshlab
@@ -38,6 +41,8 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 IDENTITY = "\n1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 \n"
+MESH_LAYERS = ("poisson_*.ply", "close_holes_*.ply")  # copies written by the poisson / close_holes stages
+PORTABLE_THREADS = 8  # process.mlx Poisson threads when poisson.threads is absent or <= 0 (-1 = all cores)
 
 def collect_layers(cfg: dict, run_dir: Path, out_dir: Path) -> list[Path]:
     """Copy the available inputs into out_dir; return the layer files (out_dir paths) in display order."""
@@ -55,6 +60,12 @@ def collect_layers(cfg: dict, run_dir: Path, out_dir: Path) -> list[Path]:
             continue
         shutil.copy2(src, out_dir / name)
         layers.append(out_dir / name)
+
+    for pattern in MESH_LAYERS:
+        found = sorted(out_dir.glob(pattern))
+        if not found:
+            log.info("export: no %s in exports/meshlab, not in the project", pattern)
+        layers += found
 
     mesh = out_dir / "mesh.ply"
     if mesh.exists():
@@ -96,7 +107,14 @@ def param(f: ET.Element, kind: str, name: str, value, **extra) -> None:
         value = str(value).lower()
     ET.SubElement(f, "Param", type=kind, name=name, value=str(value), **{k: str(v) for k, v in extra.items()})
 
-def write_script(path: Path, ecfg: dict, diag: float) -> None:
+def poisson_threads(cfg: dict) -> int:
+    """Fixed thread count for process.mlx: poisson.threads (legacy mesh.poisson_threads), else PORTABLE_THREADS."""
+
+    threads = cfg.get("poisson", {}).get("threads", cfg.get("mesh", {}).get("poisson_threads", PORTABLE_THREADS))
+
+    return int(threads) if threads and threads > 0 else PORTABLE_THREADS
+
+def write_script(path: Path, ecfg: dict, diag: float, threads: int) -> None:
     """Filter names / Param names and types as written by pymeshlab 2025.7 save_filter_script."""
 
     root = ET.Element("FilterScript")
@@ -117,7 +135,7 @@ def write_script(path: Path, ecfg: dict, diag: float) -> None:
     param(f, "RichInt", "iters", 8)
     param(f, "RichBool", "confidence", False)
     param(f, "RichBool", "preClean", True)
-    param(f, "RichInt", "threads", os.cpu_count() or 1)
+    param(f, "RichInt", "threads", threads)
 
     f = ET.SubElement(root, "filter", name="Remove Isolated pieces (wrt Diameter)")
     param(f, "RichAbsPerc", "MinComponentDiag", round(ecfg["isolated_diameter_frac"] * diag, 6), min=0, max=round(diag, 6))
@@ -144,8 +162,9 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
 
     project, script = out_dir / "project.mlp", out_dir / "process.mlx"
     write_project(project, layers)
-    clouds = [p for p in layers if p.name != "mesh.ply"]
-    write_script(script, ecfg, bbox_diag(clouds or layers))
+    meshes = {p for pattern in MESH_LAYERS for p in out_dir.glob(pattern)} | {out_dir / "mesh.ply"}
+    clouds = [p for p in layers if p not in meshes]
+    write_script(script, ecfg, bbox_diag(clouds or layers), poisson_threads(cfg))
     stage_layers = ", ".join(p.name for p in layers)
     log.info("export: %d layers -> %s (%s)", len(layers), project, stage_layers)
     log.info("MeshLab: File > Open Project... %s", project)
@@ -167,13 +186,16 @@ if __name__ == "__main__":
         stage_io.write_ply(rd / "dense/patch_match/fused.ply", pts * 2, cols)
         stage_io.write_ply(rd / "clean/sparse/cloud_clean.ply", pts, cols)
         stage_io.write_ply(rd / "exports/meshlab/mesh.ply", pts)
-        cfg = {"dense": {"methods": ["patch_match", "openmvs"]},
+        for name in ("close_holes_pre_raw.ply", "close_holes_pre_pre.ply", "poisson_pre.ply"):
+            stage_io.write_ply(rd / "exports/meshlab" / name, pts)
+        cfg = {"dense": {"methods": ["patch_match", "openmvs"]}, "poisson": {"threads": 6},
                "export": {"enabled": True, "normals_k": 10, "normals_smooth_iter": 0, "poisson_depth": 8,
                           "poisson_samples_per_node": 1.5, "poisson_point_weight": 4.0,
                           "isolated_diameter_frac": 0.1}}
         project = run(cfg, str(rd), str(Path(tmp) / "artifacts"))
         out = rd / "exports" / "meshlab"
-        expected = ["sparse.ply", "fused_patch_match.ply", "cloud_clean_sparse.ply", "mesh.ply"]
+        expected = ["sparse.ply", "fused_patch_match.ply", "cloud_clean_sparse.ply", "poisson_pre.ply",
+                    "close_holes_pre_pre.ply", "close_holes_pre_raw.ply", "mesh.ply"]
         assert all((out / n).exists() for n in expected) and not (out / "fused_openmvs.ply").exists()
         assert project.read_text().startswith("<!DOCTYPE MeshLabDocument>")
         meshes = ET.parse(project).getroot().findall("MeshGroup/MLMesh")
@@ -182,5 +204,8 @@ if __name__ == "__main__":
         filters = [f.get("name") for f in ET.parse(out / "process.mlx").getroot().findall("filter")]
         assert filters == ["Compute normals for point sets", "Surface Reconstruction: Screened Poisson",
                            "Remove Isolated pieces (wrt Diameter)", "Remove Unreferenced Vertices"]
+        threads = ET.parse(out / "process.mlx").getroot().find("filter[2]/Param[@name='threads']").get("value")
+        assert threads == "6" and poisson_threads({"poisson": {"threads": -1}}) == PORTABLE_THREADS
+        assert poisson_threads({"mesh": {"poisson_threads": 4}}) == 4 and poisson_threads({}) == PORTABLE_THREADS
         assert run({**cfg, "export": {**cfg["export"], "enabled": False}}, str(rd), tmp) is None
     print("OK")
