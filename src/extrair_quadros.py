@@ -85,7 +85,7 @@ def run(cfg: dict) -> list[str]:
     for i, f in tqdm(video.read(cfg["video"], lidos), total=len(lidos), desc="salvando quadros", unit="quadro"):
         if i in nomes:
             writer.save_frame(os.path.join(cfg["output_dir"], nomes[i]), f,
-                              cfg["max_width"], cfg["jpeg_quality"])
+                              cfg["max_side"], cfg["jpeg_quality"])
         else:
             blur.save_discarded(cfg["output_dir"], dropped[i], i, f, bcfg)
 
@@ -128,7 +128,7 @@ def run_all(cfg: dict) -> list[str]:
             feats.append(features.detect(orb, gray))
             nitidez.append(laplacian_var(gray))
             motion.append(blur.motion_ratio(gray))
-            pending.append(pool.submit(writer.save_frame, cand(i), f, cfg["max_width"], cfg["jpeg_quality"]))
+            pending.append(pool.submit(writer.save_frame, cand(i), f, cfg["max_side"], cfg["jpeg_quality"]))
             if len(pending) > 4 * workers:  # bound the frames waiting in memory
                 pending.pop(0).result()
 
@@ -200,7 +200,7 @@ if __name__ == "__main__":
         cfg = {"video": path, "output_dir": os.path.join(tmp, "frames"), "selection": "overlap", "min_frames": 5, "max_frames": 300,
                "overlap": 0.7, "overlap_min": 0.6, "overlap_max": 0.8, "overlap_step": 0.025, "max_adjust_iters": 12,
                "stride": 1, "analysis_width": 640, "nfeatures": 1000, "lowe_ratio": 0.75, "min_good_matches": 15,
-               "ransac_threshold_px": 3.0, "min_inliers": 12, "sharp_percentile": 0, "max_width": 1920,
+               "ransac_threshold_px": 3.0, "min_inliers": 12, "sharp_percentile": 0, "max_side": 1920,
                "image_format": "png", "jpeg_quality": 95,
                "blur": {"enabled": True, "coef_min": 0.5, "motion_ratio_max": 4.0, "keep_for_sfm_only": False,
                         "window": 9, "discard_width": 320, "discard_jpeg_quality": 90}}
@@ -232,6 +232,8 @@ if __name__ == "__main__":
         assert len(frames) == 58 and not os.path.exists(os.path.join(out, "_candidates")), len(frames)
         assert os.listdir(os.path.join(out, "discarded", "blur")) == ["000020.jpg"]
         assert cv2.imread(frames[0]).shape == (360, 640, 3)
+        writer.save_frame(os.path.join(tmp, "portrait.png"), np.zeros((3840, 2160, 3), np.uint8), 1920, 95)
+        assert cv2.imread(os.path.join(tmp, "portrait.png")).shape == (1920, 1080, 3)  # longest side capped
         rows = stage_io.read_csv(os.path.join(out, "selecao.csv"))
         assert len(rows) == 60 and {r["frame_video"] for r in rows if r["kept"] == "0"} == {"20", "40"}
         m = stage_io.read_csv(os.path.join(out, "extraction_metrics.csv"))[0]

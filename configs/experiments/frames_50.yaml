@@ -42,7 +42,7 @@ extraction:                   # src/extrair_quadros.py
   ransac_threshold_px: 3.0
   min_inliers: 12
   sharp_percentile: 25        # overlap mode only: drop the blurriest 25% of sampled frames before selection
-  max_width: 1920             # max width of saved frames
+  max_side: 1920              # longest side of saved frames (landscape or portrait: 2160x3840 -> 1080x1920)
   image_format: png           # png = lossless; jpg allowed
   jpeg_quality: 95
   blur:                       # src/extraction/blur.py

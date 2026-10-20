@@ -39,7 +39,7 @@ class Extraction(Strict):
     overlap: float = 0.70; overlap_min: float = 0.60; overlap_max: float = 0.80; overlap_step: float = 0.025
     max_adjust_iters: int = 12; stride: int = 1; analysis_width: int = 640; nfeatures: int = 1000
     lowe_ratio: float = 0.75; min_good_matches: int = 15; ransac_threshold_px: float = 3.0; min_inliers: int = 12
-    sharp_percentile: float = 25; max_width: int = 1920; image_format: Literal["png", "jpg"] = "png"; jpeg_quality: int = 95
+    sharp_percentile: float = 25; max_side: int = 1920; image_format: Literal["png", "jpg"] = "png"; jpeg_quality: int = 95
     blur: ExtractionBlur = ExtractionBlur()
 
 class Blur(Strict): laplacian_var_min: float = 100.0; relative_to_median: float = 0.5

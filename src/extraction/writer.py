@@ -20,10 +20,11 @@ import csv
 
 import cv2
 
-def save_frame(path, frame, max_width, jpeg_quality):
+def save_frame(path, frame, max_side, jpeg_quality):
 
-    if frame.shape[1] > max_width:
-        s = max_width / frame.shape[1]
+    # max_side limits the LONGEST side: landscape 3840x2160 and portrait 2160x3840 both fit 1920
+    if max(frame.shape[:2]) > max_side:
+        s = max_side / max(frame.shape[:2])
         frame = cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
 
     # png is lossless by default; only jpg takes a quality flag
