@@ -116,13 +116,14 @@ def enter_repo(config_arg, repo_root) -> Path:
     """Absolute config path (relative to the caller's directory, else to the repo root) and chdir to the
     repo root, so every relative path inside the YAML starts there whatever directory main.py runs from."""
 
+    caller = Path.cwd()
     config = Path(config_arg).expanduser()
     if not config.is_absolute():
-        config = Path.cwd() / config if (Path.cwd() / config).exists() else Path(repo_root) / config
+        config = caller / config if (caller / config).exists() else Path(repo_root) / config
 
     os.chdir(repo_root)
     if not config.is_file():
-        raise SystemExit(f"config {config_arg} not found (looked in {Path.cwd()} and {repo_root})")
+        raise SystemExit(f"config {config_arg} not found (looked in {caller} and {repo_root})")
 
     return config.resolve()
 
