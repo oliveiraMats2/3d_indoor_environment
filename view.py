@@ -16,9 +16,9 @@
 # ║  ⠀⠀⠀⠈⣿⣿⣿⡆⠀⠀⠀⣿⣿⣿⡟⣼⡿⠁⢹⣿⣿⣷⠀⠀⠀⠀⠀⠀⠀⠀                                            ║
 # ╚══════════════════════════════════════════════════════════════════════════════════════╝
 
-"""Interactive viewer: python view.py --config configs/default.yaml (needs a finished run; main.py records
-the orbit video itself)."""
-import argparse, logging, os, sys
+"""Interactive viewer: python3 view.py [<config>.yaml] (or --config <path>; needs a finished run of the same
+config; main.py records the orbit video itself)."""
+import logging, os, sys
 from pathlib import Path
 
 import yaml
@@ -37,17 +37,15 @@ def resolve_run_dir(cfg: dict, config_path: Path) -> Path:
 
 def main():
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/default.yaml")
-    args = parser.parse_args()
-    config_path = stage_io.enter_repo(args.config, os.path.dirname(os.path.abspath(__file__)))  # cwd = repo root
+    config_arg = stage_io.config_arg("Interactive Open3D viewer of a finished run of this config.")
+    config_path = stage_io.enter_repo(config_arg, os.path.dirname(os.path.abspath(__file__)))  # cwd = repo root
     raw = yaml.safe_load(open(config_path)) or {}
     cfg = Config.model_validate(raw).model_dump()
     logging.basicConfig(level=cfg["run"]["log_level"], format="%(asctime)s %(name)s %(levelname)s %(message)s",
                         handlers=[logging.StreamHandler(sys.stdout)])
     run_dir = resolve_run_dir(cfg, config_path)
     if not run_dir.exists():
-        sys.exit(f"{run_dir} does not exist; run main.py --config {config_path} first")
+        sys.exit(f"{run_dir} does not exist; run python3 main.py {config_path} first")
 
     log.info("viewer on %s", run_dir)
     viewer.run(cfg, str(run_dir), interactive=True)

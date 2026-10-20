@@ -8,7 +8,7 @@
 # with 'axis of this copy'). No inheritance: this file reads on its own.
 # =============================================================================
 # Single default experiment: one YAML = one experiment. Every key is validated by
-# main.py and unknown keys are rejected. Run: python main.py --config configs/default.yaml
+# main.py and unknown keys are rejected. Run: python3 main.py default.yaml (or ./run.sh default.yaml)
 
 # Layout (<ws> = extraction.video without extension): <ws>/frames/<tag>/, <ws>/results/<id>/, <ws>/artifacts/<id>/
 
@@ -235,7 +235,7 @@ export:                       # src/export/meshlab.py (MeshLab project + filter 
   poisson_point_weight: 4.0   # 0 = classic Poisson
   isolated_diameter_frac: 0.1 # remove pieces with diameter < frac * bbox diagonal
 
-viewer:                       # src/viewer.py: main.py records the orbit; python view.py --config <this file> opens the window
+viewer:                       # src/viewer.py: main.py records the orbit; python3 view.py <this file> opens the window
   enabled: true               # main.py records <run_dir>/videos/navigation_<cloud>_<seconds>s.mp4 (child process: a renderer crash only skips the video)
   cloud: sparse               # sparse | patch_match | openmvs | mesh
   seconds: 45

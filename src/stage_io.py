@@ -112,20 +112,47 @@ def find_video(path) -> Path | None:
 
     return match[0] if match else None
 
+CONFIG_DIRS = (".", "configs", "configs/experiments")  # repo-root folders searched for a relative config
+
+def config_arg(description: str, argv=None) -> str:
+    """Config path from the command line: positional `<config>.yaml` or `--config <path>` (not both);
+    neither -> configs/default.yaml."""
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("config", nargs="?", metavar="CONFIG.yaml",
+                        help="path, or bare name looked up in the current dir, then configs/, then configs/experiments/")
+    parser.add_argument("--config", dest="config_opt", metavar="CONFIG.yaml", help="same as the positional argument")
+    args = parser.parse_args(argv)
+    if args.config and args.config_opt:
+        parser.error("give the config once: positional or --config")
+
+    return args.config_opt or args.config or "configs/default.yaml"
+
+def find_config(config_arg, caller, repo_root) -> Path | None:
+    """Absolute path as given; a relative one is tried in the caller's directory, then in the repo root,
+    configs/ and configs/experiments/ (also with .yaml appended when it has no suffix). None if missing."""
+
+    config = Path(config_arg).expanduser()
+    names = [config] if config.suffix else [config, config.with_name(config.name + ".yaml")]
+    bases = [Path()] if config.is_absolute() else [Path(caller)] + [Path(repo_root) / d for d in CONFIG_DIRS]
+    hits = [b / n for n in names for b in bases if (b / n).is_file()]
+
+    return hits[0].resolve() if hits else None
+
 def enter_repo(config_arg, repo_root) -> Path:
-    """Absolute config path (relative to the caller's directory, else to the repo root) and chdir to the
-    repo root, so every relative path inside the YAML starts there whatever directory main.py runs from."""
+    """Absolute config path (see find_config) and chdir to the repo root, so every relative path inside the
+    YAML starts there whatever directory main.py runs from."""
 
     caller = Path.cwd()
-    config = Path(config_arg).expanduser()
-    if not config.is_absolute():
-        config = caller / config if (caller / config).exists() else Path(repo_root) / config
-
+    config = find_config(config_arg, caller, repo_root)
     os.chdir(repo_root)
-    if not config.is_file():
-        raise SystemExit(f"config {config_arg} not found (looked in {caller} and {repo_root})")
+    if config is None:
+        dirs = ", ".join(str(Path(repo_root) / d) for d in CONFIG_DIRS)
+        raise SystemExit(f"config {config_arg} not found (looked in the caller directory {caller}, then {dirs})")
 
-    return config.resolve()
+    return config
 
 def check_intrinsics(intrinsics: dict, frame_path) -> bool:
     """WARNING when geometry.intrinsics cx/cy do not match the frame centre (another resolution or video:
@@ -231,9 +258,20 @@ if __name__ == "__main__":
         (Path(tmp) / "repo/configs").mkdir(parents=True)
         (Path(tmp) / "repo/configs/x.yaml").write_text("run: {}\n")
         (Path(tmp) / "elsewhere").mkdir()
-        os.chdir(Path(tmp) / "elsewhere")
-        assert enter_repo("configs/x.yaml", Path(tmp) / "repo") == (Path(tmp) / "repo/configs/x.yaml").resolve()
-        assert Path.cwd() == (Path(tmp) / "repo").resolve()
+        (Path(tmp) / "repo/configs/experiments").mkdir()
+        (Path(tmp) / "repo/configs/experiments/e.yaml").write_text("run: {}\n")
+        (Path(tmp) / "elsewhere/x.yaml").write_text("run: {}\n")
+        repo, here = (Path(tmp) / "repo").resolve(), (Path(tmp) / "elsewhere").resolve()
+        os.chdir(here)
+        assert enter_repo("configs/x.yaml", repo) == repo / "configs/x.yaml" and Path.cwd() == repo
+        os.chdir(here)
+        assert enter_repo("x.yaml", repo) == here / "x.yaml"  # caller dir first
+        assert find_config("e.yaml", here, repo) == find_config("e", here, repo) == repo / "configs/experiments/e.yaml"
+        (here / "x.yaml").unlink()
+        assert find_config("x.yaml", here, repo) == repo / "configs/x.yaml" and find_config("no.yaml", here, repo) is None
+        assert find_config(str(repo / "configs/x.yaml"), "/", repo) == repo / "configs/x.yaml"
+        assert config_arg("t", []) == "configs/default.yaml" and config_arg("t", ["a.yaml"]) == "a.yaml"
+        assert config_arg("t", ["--config", "b.yaml"]) == "b.yaml"
         os.chdir(cwd)
         import cv2
         cv2.imwrite(str(Path(tmp) / "f.png"), np.zeros((1080, 1920, 3), np.uint8))

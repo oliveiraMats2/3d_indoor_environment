@@ -16,8 +16,8 @@
 # ║  ⠀⠀⠀⠈⣿⣿⣿⡆⠀⠀⠀⣿⣿⣿⡟⣼⡿⠁⢹⣿⣿⣷⠀⠀⠀⠀⠀⠀⠀⠀                                            ║
 # ╚══════════════════════════════════════════════════════════════════════════════════════╝
 
-"""Single entry point: python main.py --config configs/default.yaml"""
-import argparse, glob, logging, os, random, shutil, sys, time
+"""Single entry point: python3 main.py [<config>.yaml] (or --config <path>; default configs/default.yaml)."""
+import glob, logging, os, random, shutil, sys, time
 from pathlib import Path
 
 import cv2
@@ -51,10 +51,8 @@ def stage(name, fn, *args):
 
 def main():
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/default.yaml")
-    args = parser.parse_args()
-    path = str(stage_io.enter_repo(args.config, os.path.dirname(os.path.abspath(__file__))))  # cwd = repo root
+    config_arg = stage_io.config_arg("Whole pipeline driven by one YAML (one YAML = one experiment).")
+    path = str(stage_io.enter_repo(config_arg, os.path.dirname(os.path.abspath(__file__))))  # cwd = repo root
     config_file = open(path)
     raw = yaml.safe_load(config_file) or {}
     cfg = Config.model_validate(raw)
