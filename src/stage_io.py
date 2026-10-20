@@ -17,7 +17,7 @@
 # ╚══════════════════════════════════════════════════════════════════════════════════════╝
 
 """Shared I/O for the pipeline stages: CSV upsert, metric logging, PLY writing, workspace and scale."""
-import csv, hashlib, json, logging
+import csv, hashlib, json, logging, os
 from pathlib import Path
 
 import numpy as np
@@ -112,6 +112,20 @@ def find_video(path) -> Path | None:
 
     return match[0] if match else None
 
+def enter_repo(config_arg, repo_root) -> Path:
+    """Absolute config path (relative to the caller's directory, else to the repo root) and chdir to the
+    repo root, so every relative path inside the YAML starts there whatever directory main.py runs from."""
+
+    config = Path(config_arg).expanduser()
+    if not config.is_absolute():
+        config = Path.cwd() / config if (Path.cwd() / config).exists() else Path(repo_root) / config
+
+    os.chdir(repo_root)
+    if not config.is_file():
+        raise SystemExit(f"config {config_arg} not found (looked in {Path.cwd()} and {repo_root})")
+
+    return config.resolve()
+
 TAG_EXCLUDED = ("rerun", "tag", "output_dir")  # cache/path flags: changing them keeps the same frames tag
 
 def extraction_tag(extraction: dict) -> str:
@@ -193,6 +207,14 @@ if __name__ == "__main__":
         assert run_dirs(c) == (Path("v/results/default"), Path("v/artifacts/default"))
         assert extraction_tag({**c["extraction"], "rerun": True, "output_dir": "x"}) == tag
         assert extraction_tag({**c["extraction"], "stride": 3}) != tag
+        cwd = os.getcwd()
+        (Path(tmp) / "repo/configs").mkdir(parents=True)
+        (Path(tmp) / "repo/configs/x.yaml").write_text("run: {}\n")
+        (Path(tmp) / "elsewhere").mkdir()
+        os.chdir(Path(tmp) / "elsewhere")
+        assert enter_repo("configs/x.yaml", Path(tmp) / "repo") == (Path(tmp) / "repo/configs/x.yaml").resolve()
+        assert Path.cwd() == (Path(tmp) / "repo").resolve()
+        os.chdir(cwd)
         (Path(tmp) / "clip.mov").write_bytes(b"x")
         assert find_video(Path(tmp) / "clip.MOV") == Path(tmp) / "clip.mov" and find_video(Path(tmp) / "no.MOV") is None
         assert find_video(Path(tmp) / "clip.mov") == Path(tmp) / "clip.mov" and find_video(Path(tmp) / "x/y.mov") is None

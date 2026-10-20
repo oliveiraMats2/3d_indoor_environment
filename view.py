@@ -39,8 +39,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
     args = parser.parse_args()
-    config_path = Path(os.path.abspath(args.config))  # relative to the caller's directory ...
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))  # ... YAML paths to the repo root (as main.py)
+    config_path = stage_io.enter_repo(args.config, os.path.dirname(os.path.abspath(__file__)))  # cwd = repo root
     raw = yaml.safe_load(open(config_path)) or {}
     cfg = Config.model_validate(raw).model_dump()
     logging.basicConfig(level=cfg["run"]["log_level"], format="%(asctime)s %(name)s %(levelname)s %(message)s",
