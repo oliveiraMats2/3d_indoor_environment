@@ -22,18 +22,17 @@ from pathlib import Path
 
 import yaml
 
-from src import stage_io, viewer
+from src import stage_io, videos, viewer
 from src.constants import Config
 
 log = logging.getLogger("view")
 
 def resolve_run_dir(cfg: dict, config_path: Path) -> Path:
-    """<ws>/results/<id>, id = run.id or the config stem (same rule as main.py)."""
+    """run_dir of main.py: stage_io.resolve_paths fills id, tag and the <ws>/... paths in cfg."""
 
-    run_id = cfg["run"]["id"] or config_path.stem
-    cfg["run"]["id"] = run_id
+    stage_io.resolve_paths(cfg, config_path)
 
-    return stage_io.workspace(cfg) / "results" / run_id
+    return stage_io.run_dirs(cfg)[0]
 
 def main():
 
@@ -53,6 +52,7 @@ def main():
     out = viewer.run(cfg, str(run_dir))
     if out is not None:
         log.info("video: %s", out)
+        videos.write_manifest(cfg, str(run_dir), str(stage_io.run_dirs(cfg)[1]))
 
 if __name__ == "__main__":
     main()

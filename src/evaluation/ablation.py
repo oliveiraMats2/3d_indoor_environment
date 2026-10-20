@@ -157,8 +157,8 @@ def _pipeline_seconds(log_path: Path) -> str:
 
 def _variant_row(run_id: str, ws: Path, cfg: dict) -> dict:
 
-    art = ws / cfg["run"]["artifacts_root"] / run_id
-    res = ws / cfg["run"]["output_root"] / run_id
+    art = ws / "artifacts" / run_id  # derived layout (stage_io.resolve_paths with null roots)
+    res = ws / "results" / run_id
     axis, value = _axis_value(run_id, EXPERIMENTS_DIR)
     row = {"run_id": run_id, "axis": axis, "value": value}
     names = {n for srcs in SOURCES.values() for n in srcs} | {"metric_error.csv"}
@@ -223,7 +223,7 @@ if __name__ == "__main__":
         (EXPERIMENTS_DIR / "lowe_070.yaml").write_text(
             "# ====\n# lowe_070\n#   axis     : filters.lowe_ratio\n#   variant  : 0.70\n#   output   : x\nrun: {}\n")
         cfg = {"extraction": {"video": str(tmp / "video_preview.MOV")},
-               "run": {"output_root": "results", "artifacts_root": "artifacts"},
+               "run": {"output_root": None, "artifacts_root": None},
                "evaluation": {"ablation_runs": ["default", "lowe_070", "ghost"]}}
         for rid, reproj, rels in [("default", 0.8, [0.1, 0.3]), ("lowe_070", 0.6, [])]:
             art = ws / "artifacts" / rid

@@ -28,6 +28,14 @@ from src import detectores, epipolar, extrair_quadros, frame_quality, matching, 
 from src.constants import Config
 from src.matching import metrics as matching_metrics
 from src.matching import visualize as matching_visualize
+from src import stage_io, videos
+from src.cloud import clean, floorplan, planes
+from src.dense import compare as dense_compare, openmvs, patch_match
+from src.epipolar import two_view
+from src.evaluation import ablation, hard_regions, loop_drift, metric_error, reprojection
+from src.export import meshlab
+from src.mesh import mesh
+from src.sfm import colmap, convert, scale
 
 log = logging.getLogger("main")
 
@@ -50,9 +58,9 @@ def main():
     config_file = open(path)
     raw = yaml.safe_load(config_file) or {}
     cfg = Config.model_validate(raw)
-    run = cfg.run
     config_path = Path(path)
-    run.id = run.id or config_path.stem
+    cfg = Config.model_validate(stage_io.resolve_paths(cfg.model_dump(), config_path))  # id, tag, <ws>/... paths
+    run = cfg.run
     run_dir = os.path.join(run.output_root, run.id)
     artifacts_dir = os.path.join(run.artifacts_root, run.id)
 
@@ -81,6 +89,8 @@ def main():
 
     log.info("run %s -> %s, %s", run.id, run_dir, artifacts_dir)
     ext = cfg.extraction
+    log.info("frames tag %s -> %s", ext.tag, ext.output_dir)
+    os.makedirs(ext.output_dir, exist_ok=True)
     selection_csv = os.path.join(ext.output_dir, "selecao.csv")
     old_pattern = os.path.join(ext.output_dir, "img_*.*")
     old_frames = sorted(glob.glob(old_pattern))
@@ -97,6 +107,10 @@ def main():
     else:
         log.info("reusing %d frames in %s (set extraction.rerun: true to extract again)", len(old_frames), ext.output_dir)
         frames = old_frames
+
+    extraction_metrics = os.path.join(ext.output_dir, "extraction_metrics.csv")
+    if os.path.exists(extraction_metrics):
+        shutil.copy(extraction_metrics, artifacts_dir)  # extraction may be cached: copy it every run
 
     quality_cfg = cfg.frame_quality.model_dump()
     metrics_csv = os.path.join(artifacts_dir, "frame_quality_metrics.csv")
@@ -117,9 +131,6 @@ def main():
         geometry_cfg = cfg.geometry.model_dump()
         stage("geometry", epipolar.run, geometry_cfg, run_dir, ext.output_dir)
 
-    report_cfg = cfg.report.model_dump()
-    stage("report", relatorio.run, report_cfg, run_dir, ext.output_dir, artifacts_dir)
-
     if cfg.matching.enabled and cfg.geometry.enabled:
         stage("matching_metrics", matching_metrics.run, run_dir, artifacts_dir)
         matches_visualize_cfg = cfg.visualize.matches.model_dump()
@@ -134,11 +145,60 @@ def main():
 
     # ponytail: evaluation is still a stub; replace the raise once implemented
     stubs = (("evaluation", "src.evaluation"),)
-    for block, package in stubs:
 
-        block_cfg = getattr(cfg, block)
-        if block_cfg.enabled:
-            raise NotImplementedError(f"{block}.enabled is true but {package} is not implemented yet")
+    full_cfg = cfg.model_dump()  # resolved paths and tag; the new stages receive the whole config
+    if cfg.geometry.enabled:
+        stage("two_view", two_view.run, full_cfg, run_dir, ext.output_dir, artifacts_dir)
+
+    if cfg.sfm.enabled:
+        stage("sfm", colmap.run, full_cfg, run_dir, artifacts_dir)
+        stage("sfm_convert", convert.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.scale.enabled:
+        stage("scale", scale.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.cleanup.enabled:
+        stage("cleanup_sparse", clean.run, full_cfg, run_dir, artifacts_dir, "sparse")
+
+    if cfg.planes.enabled:
+        stage("planes", planes.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.floorplan.enabled:
+        stage("floorplan", floorplan.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.dense.enabled:
+        dense_runs = {"patch_match": patch_match.run, "openmvs": openmvs.run}
+        for method in cfg.dense.methods:
+            stage(f"dense_{method}", dense_runs[method], full_cfg, run_dir, artifacts_dir)
+
+        for method in cfg.dense.methods:
+            if cfg.cleanup.enabled:
+                stage(f"cleanup_{method}", clean.run, full_cfg, run_dir, artifacts_dir, method)
+
+    if cfg.dense_compare.enabled:
+        stage("dense_compare", dense_compare.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.mesh.enabled:
+        stage("mesh", mesh.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.export.enabled:
+        stage("export", meshlab.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.evaluation.enabled:
+        stage("reprojection", reprojection.run, full_cfg, run_dir, artifacts_dir)
+        stage("metric_error", metric_error.run, full_cfg, run_dir, artifacts_dir)
+        stage("loop_drift", loop_drift.run, full_cfg, run_dir, artifacts_dir)
+        if cfg.evaluation.hard_regions:
+            stage("hard_regions", hard_regions.run, full_cfg, run_dir, artifacts_dir)
+
+        if cfg.evaluation.ablation_runs:
+            stage("ablation", ablation.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.videos.enabled:
+        stage("videos", videos.run, full_cfg, run_dir, artifacts_dir)
+
+    report_cfg = cfg.report.model_dump()
+    stage("report", relatorio.run, report_cfg, run_dir, ext.output_dir, artifacts_dir)
 
 if __name__ == "__main__":
     main()
