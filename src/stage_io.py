@@ -52,6 +52,20 @@ def log_metrics(logger: logging.Logger, row: dict) -> None:
     for name, value in row.items():
         logger.info("metric %s=%s", name, value)
 
+def uniform_subsample(items: list, n: int | None, what: str = "max_frames") -> list:
+    """Uniform subsample keeping the first and last item; n None or >= len -> all items (logged)."""
+
+    items = list(items)
+    if n is not None and len(items) > n:
+        pos = np.unique(np.round(np.linspace(0, len(items) - 1, n)).astype(int))
+        items_out = [items[i] for i in pos]
+    else:
+        items_out = items
+
+    log.info("%s: %d of %d items", what, len(items_out), len(items))
+
+    return items_out
+
 def write_ply(path, points: np.ndarray, colors: np.ndarray | None = None) -> None:
     """Binary little-endian PLY with float xyz and optional uint8 rgb."""
 
@@ -149,6 +163,7 @@ if __name__ == "__main__":
         assert [(r["source"], r["n"]) for r in rows] == [("dense", "2"), ("sparse", "3")]
         write_ply(Path(tmp) / "c.ply", np.zeros((4, 3)), np.full((4, 3), 255))
         assert (Path(tmp) / "c.ply").stat().st_size > 4 * 15
+        assert uniform_subsample(list(range(10)), 4) == [0, 3, 6, 9] and uniform_subsample([1, 2], None) == [1, 2]
         assert scale_info(tmp)[1] == "model"
         assert abs(units_per_cm(tmp, np.array([[0, 0, 0], [10, 0, 0.0]]), 500.0) - 0.0192) < 1e-3
         assert workspace({"extraction": {"video": "video_preview.MOV"}}) == Path("video_preview")

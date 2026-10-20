@@ -115,6 +115,7 @@ def main():
     quality_cfg = cfg.frame_quality.model_dump()
     metrics_csv = os.path.join(artifacts_dir, "frame_quality_metrics.csv")
     kept = stage("frame_quality", frame_quality.run, quality_cfg, frames, metrics_csv)
+    kept = stage_io.uniform_subsample(kept, cfg.detection.max_frames, "detection.max_frames (2D stages; COLMAP uses every frame)")
     detection_marker = os.path.join(run_dir, "detection_complete.npy")
     if run.cache and os.path.exists(detection_marker) and not extract:
         log.info("cache: reusing detection in %s", run_dir)
