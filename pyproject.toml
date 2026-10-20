@@ -1,5 +1,22 @@
 [project]
 name = "3d-indoor-environment"
 version = "0.1.0"
-requires-python = ">=3.10"
-dependencies = ["opencv-contrib-python", "numpy", "pyyaml", "pydantic>=2", "tqdm", "open3d", "trimesh"]
+# <3.13: open3d 0.19 (the last release with macOS Intel wheels) ships cp310-cp312 only
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "opencv-contrib-python>=5.0.0.93,<6",  # OpenCV 5 API (xfeatures2d, aruco.ArucoDetector); wheels: manylinux_2_17+, macOS arm64 13+, x86_64 14+
+    "numpy>=2,<3",
+    "pyyaml>=6",
+    "pydantic>=2,<3",
+    "tqdm>=4.66",
+    "trimesh>=4,<6",
+    # open3d wheels: 0.20 = Linux glibc>=2.35 (x86_64, aarch64), macOS arm64, Windows; 0.19 = macOS Intel (universal2)
+    "open3d==0.20.*; sys_platform != 'darwin' or platform_machine == 'arm64'",
+    "open3d==0.19.*; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    # pymeshlab has wheels only (no sdist): Linux glibc>=2.35 x86_64/aarch64, macOS 11+ arm64/x86_64, Windows amd64.
+    # Elsewhere it is not installed and the close_holes stage skips with a WARNING.
+    "pymeshlab>=2023.12; (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or sys_platform == 'darwin' or (sys_platform == 'win32' and platform_machine == 'AMD64')",
+]
+
+# No [build-system]: an application, not a package. Install: `uv sync` (creates .venv from uv.lock), or
+# `python3 -m venv .venv` + `.venv/bin/pip install` of the dependencies above; then activate .venv.
