@@ -12,7 +12,7 @@ run:
 
 extraction:                   # src/extrair_quadros.py
   rerun: false                # true = extract again (old img_* and selecao.csv in output_dir are deleted); false = reuse frames if selecao.csv exists
-  video: 3d_image_video.MOV
+  video: video_preview.MOV
   output_dir: frames          # shared by all experiments, gitignored
   min_frames: 100
   max_frames: 300
