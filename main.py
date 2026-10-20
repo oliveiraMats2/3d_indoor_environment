@@ -28,7 +28,7 @@ from src import detectores, epipolar, extrair_quadros, frame_quality, matching, 
 from src.constants import Config
 from src.matching import metrics as matching_metrics
 from src.matching import visualize as matching_visualize
-from src import stage_io, videos
+from src import stage_io, videos, viewer
 from src.cloud import clean, floorplan, planes
 from src.dense import compare as dense_compare, openmvs, patch_match
 from src.epipolar import two_view
@@ -199,6 +199,11 @@ def main():
 
         if cfg.evaluation.ablation_runs:
             stage("ablation", ablation.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.viewer.enabled:  # before videos: videos.csv then lists navigation_<cloud>_<s>s.mp4
+        stage("viewer", viewer.run_safe, full_cfg, run_dir)
+        if not cfg.videos.enabled:
+            stage("videos_manifest", videos.write_manifest, full_cfg, run_dir, artifacts_dir)
 
     if cfg.videos.enabled:
         stage("videos", videos.run, full_cfg, run_dir, artifacts_dir)

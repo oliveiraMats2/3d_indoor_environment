@@ -16,13 +16,14 @@
 # ║  ⠀⠀⠀⠈⣿⣿⣿⡆⠀⠀⠀⣿⣿⣿⡟⣼⡿⠁⢹⣿⣿⣷⠀⠀⠀⠀⠀⠀⠀⠀                                            ║
 # ╚══════════════════════════════════════════════════════════════════════════════════════╝
 
-"""Viewer entry point: python view.py --config configs/default.yaml (needs a finished run)."""
+"""Interactive viewer: python view.py --config configs/default.yaml (needs a finished run; main.py records
+the orbit video itself)."""
 import argparse, logging, os, sys
 from pathlib import Path
 
 import yaml
 
-from src import stage_io, videos, viewer
+from src import stage_io, viewer
 from src.constants import Config
 
 log = logging.getLogger("view")
@@ -49,10 +50,7 @@ def main():
         sys.exit(f"{run_dir} does not exist; run main.py --config {config_path} first")
 
     log.info("viewer on %s", run_dir)
-    out = viewer.run(cfg, str(run_dir))
-    if out is not None:
-        log.info("video: %s", out)
-        videos.write_manifest(cfg, str(run_dir), str(stage_io.run_dirs(cfg)[1]))
+    viewer.run(cfg, str(run_dir), interactive=True)
 
 if __name__ == "__main__":
     main()

@@ -41,11 +41,11 @@
 #     fps, resolution, run_id), read with cv2.VideoCapture; cloud parsed from
 #     navigation_<cloud>_<s>s.mp4. This stage is the ONLY writer of it.
 #     write_manifest(cfg, run_dir, artifacts_dir) refreshes it alone and is
-#     meant to be called by view.py / run.sh after the viewer recording.
+#     called by main.py after the viewer stage when videos.enabled is false.
 # In:  figures/floorplan.png, floorplan/{grid,grid_meta}.npy, scale/centers_cm.npy,
 #      planes/T_floor.npy, sfm/{cam_R,image_names}.npy, frames dir, video.
 # Out: videos/{trajectory_topdown,frames_kept_vs_discarded}.mp4, artifacts/<id>/videos.csv.
-# YAML: videos: {enabled: true, topdown_fps: 10, kept_vs_discarded: true, width: 960, codec: mp4v}
+# YAML: videos: {enabled: true, topdown_fps: 10, kept_vs_discarded: true, width: 960, codec: auto}
 # Rules: missing inputs -> WARNING and skip that video, never raise; OpenCV only.
 # ==============================================================================
 
@@ -73,15 +73,29 @@ def even(n: int) -> int:
 
     return max(2, int(n) // 2 * 2)
 
+AUTO_CODECS = ("avc1", "mp4v")  # H.264 when the OpenCV build has an encoder (macOS AVFoundation), else MPEG-4
+
 def open_writer(path: Path, fps: float, size: tuple[int, int], codec: str) -> cv2.VideoWriter | None:
+    """First codec whose writer opens (codec "auto" tries AUTO_CODECS in order); None (WARNING) if none does."""
 
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*codec), float(fps), size)
-    if not writer.isOpened():
-        log.warning("videos: cannot open writer %s (codec %s)", path, codec)
-        return None
+    for fourcc in (AUTO_CODECS if codec == "auto" else (codec,)):
+        level = cv2.utils.logging.getLogLevel()
+        if codec == "auto":  # a missing H.264 encoder is expected on Linux wheels: probe it silently
+            cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+        try:
+            writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*fourcc), float(fps), size)
+        finally:
+            cv2.utils.logging.setLogLevel(level)
+        if writer.isOpened():
+            log.info("videos: %s with codec %s", path.name, fourcc)
+            return writer
+        writer.release()
 
-    return writer
+    log.warning("videos: cannot open writer %s (codec %s)", path, codec)
+
+    return None
 
 # ---------------------------------------------------------------- top-down trajectory
 def floorplan_mapping(cfg: dict, run_dir: Path, image: np.ndarray | None):
@@ -331,7 +345,7 @@ def nav_cloud(path: Path) -> str:
 
 def write_manifest(cfg: dict, run_dir: str, artifacts_dir: str) -> list[dict]:
     """Rewrite artifacts/<id>/videos.csv from <run_dir>/videos/*.mp4. Safe to call again after
-    view.py records navigation_<cloud>_<s>s.mp4 (e.g. from view.py or run.sh)."""
+    the viewer stage of main.py records navigation_<cloud>_<s>s.mp4."""
 
     rows = []
     for p in sorted((Path(run_dir) / "videos").glob("*.mp4")):
@@ -390,7 +404,7 @@ if __name__ == "__main__":
                               "blur": {"coef_min": 0.5, "motion_ratio_max": 4.0}},
                "floorplan": {"dpi": 50, "fig_inches": 4.0},
                "videos": {"enabled": True, "topdown_fps": 10, "kept_vs_discarded": True, "width": 160,
-                          "codec": "mp4v"}}
+                          "codec": "auto"}}
 
         # floor plan exactly as src/cloud/floorplan.render sizes it: grid (40, 60), dpi 50 -> 250x183 png
         for d in ("floorplan", "figures", "scale", "planes", "sfm"):

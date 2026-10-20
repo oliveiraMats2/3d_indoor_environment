@@ -144,12 +144,13 @@ class Export(Strict):
     isolated_diameter_frac: float = 0.1
 
 class Viewer(Strict):
-    cloud: Literal["sparse", "patch_match", "openmvs", "mesh"] = "sparse"; record: bool = False
-    seconds: int = 45; fps: int = 30; offscreen: bool = False; width: int = 1280; height: int = 720
+    enabled: bool = True; cloud: Literal["sparse", "patch_match", "openmvs", "mesh"] = "sparse"
+    seconds: int = 45; fps: int = 30; offscreen: Union[bool, Literal["auto"]] = "auto"; timeout_s: float = 1800
+    width: int = 1280; height: int = 720
     frustum_cm: float = 20.0; point_size: float = 2.0; fov_deg: float = 60.0
     orbit_radius_factor: float = 1.5; orbit_elevation_deg: float = 30.0; background: list[float] = [1.0, 1.0, 1.0]
 
-class Videos(Strict): enabled: bool = True; topdown_fps: float = 10; kept_vs_discarded: bool = True; width: int = 960; codec: str = "mp4v"
+class Videos(Strict): enabled: bool = True; topdown_fps: float = 10; kept_vs_discarded: bool = True; width: int = 960; codec: str = "auto"
 
 class Config(Strict):
     run: Run = Run(); extraction: Extraction = Extraction(); frame_quality: FrameQuality = FrameQuality()

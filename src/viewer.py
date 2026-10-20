@@ -19,26 +19,30 @@
 """Viewer: Open3D window (or offscreen render) of a cloud with the camera trajectory and frustums;
 optionally records an orbit video."""
 # PROMPT COMPLEMENT
-# Stage: viewer (standalone, `python view.py --config <yaml>`; not called by main.py).
-# Goal : show the reconstruction (cloud or mesh) + camera trajectory + frustums; record: true renders an
+# Stage: viewer (last 3D stage of main.py, before videos: run_safe records the orbit video in a child
+#        process; `python view.py --config <yaml>` opens the interactive window on a finished run).
+# Goal : show the reconstruction (cloud or mesh) + camera trajectory + frustums; main.py renders an
 #        orbit around the scene centre into an mp4 without user interaction.
 # In   : viewer.cloud -> sparse: clean/sparse/cloud_clean.ply (fallback exports/colmap/sparse.ply);
 #        patch_match|openmvs: clean/<m>/cloud_clean.ply (fallback dense/<m>/fused.ply);
 #        mesh: exports/meshlab/mesh.ply. scale/centers_cm.npy, sfm/{K,cam_R,cam_t}.npy,
 #        planes/T_floor.npy (optional, gives the up axis).
-# Out  : record true -> <run_dir>/videos/navigation_<cloud>_<seconds>s.mp4 (mp4v). No CSV (videos.csv
-#        belongs to the videos stage).
-# YAML : viewer.{cloud, record, seconds, fps, offscreen, width, height, frustum_cm, point_size, fov_deg,
-#        orbit_radius_factor, orbit_elevation_deg, background}; scale.provisional_extent_cm.
+# Out  : <run_dir>/videos/navigation_<cloud>_<seconds>s.mp4 (videos.codec through videos.open_writer).
+#        No CSV (videos.csv belongs to the videos stage; main.py rewrites it after this stage).
+# YAML : viewer.{enabled, cloud, seconds, fps, offscreen (auto|true|false), timeout_s, width, height,
+#        frustum_cm, point_size, fov_deg, orbit_radius_factor, orbit_elevation_deg, background};
+#        videos.codec; scale.provisional_extent_cm; run.log_level.
 # Rules: clean clouds and mesh are in working units (frame of scale/centers_cm.npy); raw sparse.ply and
 #        fused.ply are in model units -> multiplied by s when stage_io.scale_info says unit=cm.
 #        Frustum size = frustum_cm * stage_io.units_per_cm. offscreen true -> rendering.OffscreenRenderer
-#        (EGL/Vulkan, no display needed); false -> hidden legacy Visualizer for recording (Open3D falls
-#        back to EGL when no display), interactive window when record is false.
-#        On this machine (Open3D 0.20, RTX 5080, SSH session with DISPLAY=localhost:10.0) GLFW cannot
-#        open an X11 window; both OffscreenRenderer and the hidden Visualizer (EGL fallback) render fine.
+#        (EGL on Linux, no display needed); false -> hidden legacy Visualizer (Open3D falls back to EGL
+#        without a display); auto -> hidden Visualizer when has_display(), else OffscreenRenderer. A blank
+#        first frame (std < 1) switches to the other renderer once. Recording runs in a "spawn" child
+#        (run_safe) so a native renderer abort (no EGL, no macOS WindowServer) cannot kill main.py.
+#        Linux + Open3D 0.20 over SSH (DISPLAY=localhost:10.0): GLFW cannot open an X11 window; both
+#        OffscreenRenderer and the hidden Visualizer (EGL fallback) render fine.
 # >>> BEGIN IMPLEMENTATION >>>
-import ctypes, ctypes.util, logging, os
+import ctypes, ctypes.util, logging, multiprocessing, os, sys
 from pathlib import Path
 
 import cv2
@@ -46,7 +50,7 @@ import numpy as np
 import open3d as o3d
 from tqdm import tqdm
 
-from src import stage_io
+from src import stage_io, videos
 
 log = logging.getLogger(__name__)
 
@@ -222,17 +226,53 @@ def render_hidden(geoms: list, v: dict, eyes: np.ndarray, centre: np.ndarray, up
     finally:
         vis.destroy_window()
 
-def record(geoms: list, v: dict, run_dir: Path, up: np.ndarray) -> Path:
+def video_out(run_dir: Path, v: dict) -> Path:
+
+    return Path(run_dir) / "videos" / f"navigation_{v['cloud']}_{v['seconds']}s.mp4"
+
+def use_offscreen(v: dict) -> bool:
+    """viewer.offscreen auto -> OffscreenRenderer only when there is no usable display."""
+
+    return (not has_display()) if v["offscreen"] == "auto" else bool(v["offscreen"])
+
+def first_frame(frames):
+    """First frame of a renderer generator, None when it is blank (std < 1) or the renderer raised."""
+
+    try:
+        frame = next(frames, None)
+    except Exception as exc:  # noqa: BLE001 - any renderer failure: try the other one
+        log.warning("viewer: renderer failed (%s)", exc)
+        return None
+
+    return frame if frame is not None and float(frame.std()) >= 1.0 else None
+
+def record(geoms: list, v: dict, run_dir: Path, up: np.ndarray, codec: str = "auto") -> Path | None:
 
     centre, radius = scene_frame(geoms)
     n = int(round(v["seconds"] * v["fps"]))
     eyes = orbit_eyes(centre, radius * v["orbit_radius_factor"], up, v["orbit_elevation_deg"], n)
-    out = run_dir / "videos" / f"navigation_{v['cloud']}_{v['seconds']}s.mp4"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"mp4v"), float(v["fps"]), (v["width"], v["height"]))
-    frames = (render_offscreen if v["offscreen"] else render_hidden)(geoms, v, eyes, centre, up)
+    out = video_out(run_dir, v)
+    offscreen = use_offscreen(v)
+    renderers = [render_offscreen, render_hidden] if offscreen else [render_hidden, render_offscreen]
+    log.info("viewer: offscreen=%s -> %s", v["offscreen"], renderers[0].__name__)
+    frames = renderers[0](geoms, v, eyes, centre, up)
+    first = first_frame(frames)
+    if first is None:
+        log.warning("viewer: %s gave no usable first frame, switching to %s", renderers[0].__name__,
+                    renderers[1].__name__)
+        frames.close()
+        frames = renderers[1](geoms, v, eyes, centre, up)
+        first = first_frame(frames)
+        if first is None:
+            log.warning("viewer: both renderers gave a blank frame, no video")
+            return None
 
-    for frame in tqdm(frames, total=n, desc="viewer orbit"):
+    writer = videos.open_writer(out, v["fps"], (v["width"], v["height"]), codec)
+    if writer is None:
+        return None
+
+    writer.write(first)
+    for frame in tqdm(frames, total=n - 1, desc="viewer orbit"):
         writer.write(frame)
     writer.release()
     log.info("viewer: %d frames -> %s", n, out)
@@ -240,8 +280,12 @@ def record(geoms: list, v: dict, run_dir: Path, up: np.ndarray) -> Path:
     return out
 
 def has_display() -> bool:
-    """True when a Wayland socket is announced or XOpenDisplay succeeds (Open3D silently goes headless
-    otherwise and an interactive window would block forever, invisible)."""
+    """macOS: True unless in an SSH session (no WindowServer access). Linux: True when a Wayland socket is
+    announced or XOpenDisplay succeeds (Open3D silently goes headless otherwise and an interactive window
+    would block forever, invisible)."""
+
+    if sys.platform == "darwin":
+        return not os.environ.get("SSH_CONNECTION")
 
     if os.environ.get("WAYLAND_DISPLAY"):
         return True
@@ -260,7 +304,8 @@ def has_display() -> bool:
 
     return bool(handle)
 
-def run(cfg: dict, run_dir: str) -> Path | None:
+def run(cfg: dict, run_dir: str, interactive: bool = False) -> Path | None:
+    """interactive False (main.py): record the orbit video; True (view.py): Open3D window."""
 
     v = cfg["viewer"]
     run_dir = Path(run_dir)
@@ -279,11 +324,11 @@ def run(cfg: dict, run_dir: str) -> Path | None:
         log.warning("viewer: nothing to show in %s", run_dir)
         return None
 
-    if v["record"]:
-        return record(geoms, v, run_dir, up_axis(run_dir, cams))
+    if not interactive:
+        return record(geoms, v, run_dir, up_axis(run_dir, cams), cfg.get("videos", {}).get("codec", "auto"))
 
     if not has_display():
-        log.warning("viewer: no usable display (DISPLAY=%s); set viewer.record: true (offscreen) instead",
+        log.warning("viewer: no usable display (DISPLAY=%s); main.py records the orbit video instead",
                     os.environ.get("DISPLAY"))
         return None
 
@@ -291,13 +336,55 @@ def run(cfg: dict, run_dir: str) -> Path | None:
                                       width=v["width"], height=v["height"])
 
     return None
+
+def _record_child(cfg: dict, run_dir: str) -> None:
+    """Child process body of run_safe: its own logging (stdout + run.log), exit 0 even without a video."""
+
+    handlers = [logging.StreamHandler(sys.stdout)]
+    if (Path(run_dir) / "run.log").exists():
+        handlers.append(logging.FileHandler(Path(run_dir) / "run.log"))
+    logging.basicConfig(level=cfg.get("run", {}).get("log_level", "INFO"), handlers=handlers,
+                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    run(cfg, run_dir)
+
+def run_safe(cfg: dict, run_dir: str) -> Path | None:
+    """main.py stage: run() in a "spawn" child, so a native Open3D abort (no EGL / no WindowServer) or a
+    hang (viewer.timeout_s) only costs the video. Returns the video path or None."""
+
+    v = cfg["viewer"]
+    if not v["enabled"]:
+        log.info("viewer disabled")
+        return None
+
+    out = video_out(Path(run_dir), v)
+    out.unlink(missing_ok=True)
+    child = multiprocessing.get_context("spawn").Process(target=_record_child, args=(cfg, str(run_dir)))
+    child.start()
+    child.join(v["timeout_s"])
+    if child.is_alive():
+        log.warning("viewer: recording still running after %s s (viewer.timeout_s): killed", v["timeout_s"])
+        child.kill()
+        child.join()
+
+    if child.exitcode != 0:
+        log.warning("viewer: recording process exited with code %s (renderer unavailable?): no video",
+                    child.exitcode)
+        return None
+
+    if not out.exists():
+        log.warning("viewer: no video written (%s)", out)
+        return None
+
+    log.info("viewer: video %s", out)
+
+    return out
 # <<< END IMPLEMENTATION <<<
 
 if __name__ == "__main__":
     import tempfile
     logging.basicConfig(level=logging.INFO)
     rng = np.random.default_rng(0)
-    base = {"cloud": "sparse", "record": True, "seconds": 2, "fps": 10, "width": 320, "height": 240,
+    base = {"enabled": True, "cloud": "sparse", "timeout_s": 300, "seconds": 2, "fps": 10, "width": 320, "height": 240,
             "frustum_cm": 20, "point_size": 2.0, "fov_deg": 60.0, "orbit_radius_factor": 1.5,
             "orbit_elevation_deg": 30.0, "background": [1.0, 1.0, 1.0]}
 
@@ -323,9 +410,12 @@ if __name__ == "__main__":
         assert np.allclose(-np.einsum("nji,nj->ni", cams[1], cams[2]), cams[3])
         ext = look_at(np.array([0.0, 0, -5]), np.zeros(3), np.array([0.0, -1, 0]))
         assert np.allclose(ext[:3, :3], np.eye(3)) and np.allclose(ext[:3, 3], [0, 0, 5])
+        assert first_frame(iter([np.zeros((4, 4, 3), np.uint8)])) is None and first_frame(iter([])) is None
+        assert first_frame(iter([rng.integers(0, 255, (4, 4, 3)).astype(np.uint8)])) is not None
 
         for offscreen in (False, True):  # hidden window first: after an OffscreenRenderer it may fail
-            cfg = {"viewer": {**base, "offscreen": offscreen}, "scale": {"provisional_extent_cm": 500}}
+            cfg = {"viewer": {**base, "offscreen": offscreen}, "scale": {"provisional_extent_cm": 500},
+                   "videos": {"codec": "auto"}}
             out = run(cfg, tmp)
             assert out == rd / "videos/navigation_sparse_2s.mp4" and out.exists()
             cap = cv2.VideoCapture(str(out))
@@ -334,6 +424,12 @@ if __name__ == "__main__":
             cap.release()
             print(f"offscreen={offscreen}: {n} frames, shape {frame.shape}, mean {frame.mean():.1f}")
             assert ok and n == 20 and frame.shape == (240, 320, 3) and frame.std() > 1
-        assert run({"viewer": {**base, "record": False}, "scale": {"provisional_extent_cm": 500}}, tmp) is None
+        cfg = {"viewer": {**base, "offscreen": "auto"}, "scale": {"provisional_extent_cm": 500}, "run": {"log_level": "INFO"}}
+        out = run_safe(cfg, tmp)  # spawn child, as main.py calls it
+        assert out == rd / "videos/navigation_sparse_2s.mp4" and out.exists()
+        print("run_safe (offscreen=auto ->", "offscreen" if use_offscreen(cfg["viewer"]) else "hidden window", "): OK")
+        assert run_safe({**cfg, "viewer": {**base, "enabled": False}}, tmp) is None
+        if has_display() is False:
+            assert run({"viewer": base, "scale": {"provisional_extent_cm": 500}}, tmp, interactive=True) is None
         print("has_display:", has_display())
     print("OK")

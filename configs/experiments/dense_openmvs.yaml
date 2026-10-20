@@ -223,12 +223,13 @@ export:                       # src/export/meshlab.py (MeshLab project + filter 
   poisson_point_weight: 4.0   # 0 = classic Poisson
   isolated_diameter_frac: 0.1 # remove pieces with diameter < frac * bbox diagonal
 
-viewer:                       # src/viewer.py (python view.py --config <this file>)
+viewer:                       # src/viewer.py: main.py records the orbit; python view.py --config <this file> opens the window
+  enabled: true               # main.py records <run_dir>/videos/navigation_<cloud>_<seconds>s.mp4 (child process: a renderer crash only skips the video)
   cloud: sparse               # sparse | patch_match | openmvs | mesh
-  record: true                # true: record the orbit to <run_dir>/videos/navigation_<cloud>_<seconds>s.mp4; false: interactive window
   seconds: 45
   fps: 30
-  offscreen: true             # true: OffscreenRenderer (works without a display); false: hidden Open3D window
+  offscreen: auto             # auto = hidden Open3D window with a display, else OffscreenRenderer (EGL) | true | false
+  timeout_s: 1800             # kill the recording process after this many seconds
   width: 1280
   height: 720
   frustum_cm: 20
@@ -243,7 +244,7 @@ videos:                       # src/videos.py
   topdown_fps: 10             # fps of trajectory_topdown.mp4 (1 frame per camera)
   kept_vs_discarded: true     # writes frames_kept_vs_discarded.mp4
   width: 960                  # output width (height proportional, even)
-  codec: mp4v                 # cv2.VideoWriter fourcc
+  codec: auto                 # auto = avc1 (H.264) if the OpenCV build can encode it, else mp4v | any cv2.VideoWriter fourcc
 
 evaluation:                   # src/evaluation
   enabled: true
