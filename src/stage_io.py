@@ -126,6 +126,25 @@ def enter_repo(config_arg, repo_root) -> Path:
 
     return config.resolve()
 
+def check_intrinsics(intrinsics: dict, frame_path) -> bool:
+    """WARNING when geometry.intrinsics cx/cy do not match the frame centre (another resolution or video:
+    fx/fy are then wrong too). True when consistent or not set."""
+
+    import cv2
+
+    image = cv2.imread(str(frame_path)) if frame_path else None
+    if image is None or intrinsics.get("cx") is None or intrinsics.get("cy") is None:
+        return True
+
+    h, w = image.shape[:2]
+    ok = abs(2 * intrinsics["cx"] - w) <= 2 and abs(2 * intrinsics["cy"] - h) <= 2
+    if not ok:
+        log.warning("geometry.intrinsics cx=%s cy=%s expect %gx%g frames but %s is %dx%d: fix or null them",
+                    intrinsics["cx"], intrinsics["cy"], 2 * intrinsics["cx"], 2 * intrinsics["cy"],
+                    Path(frame_path).name, w, h)
+
+    return ok
+
 TAG_EXCLUDED = ("rerun", "tag", "output_dir")  # cache/path flags: changing them keeps the same frames tag
 
 def extraction_tag(extraction: dict) -> str:
@@ -215,6 +234,11 @@ if __name__ == "__main__":
         assert enter_repo("configs/x.yaml", Path(tmp) / "repo") == (Path(tmp) / "repo/configs/x.yaml").resolve()
         assert Path.cwd() == (Path(tmp) / "repo").resolve()
         os.chdir(cwd)
+        import cv2
+        cv2.imwrite(str(Path(tmp) / "f.png"), np.zeros((1080, 1920, 3), np.uint8))
+        assert check_intrinsics({"cx": 960, "cy": 540}, Path(tmp) / "f.png")
+        assert not check_intrinsics({"cx": 960, "cy": 720}, Path(tmp) / "f.png")
+        assert check_intrinsics({"cx": None, "cy": None}, Path(tmp) / "f.png") and check_intrinsics({"cx": 1}, None)
         (Path(tmp) / "clip.mov").write_bytes(b"x")
         assert find_video(Path(tmp) / "clip.MOV") == Path(tmp) / "clip.mov" and find_video(Path(tmp) / "no.MOV") is None
         assert find_video(Path(tmp) / "clip.mov") == Path(tmp) / "clip.mov" and find_video(Path(tmp) / "x/y.mov") is None

@@ -113,6 +113,7 @@ def main():
         log.info("reusing %d frames in %s (set extraction.rerun: true to extract again)", len(old_frames), ext.output_dir)
         frames = old_frames
 
+    stage_io.check_intrinsics(cfg.geometry.intrinsics.model_dump(), frames[0] if frames else None)
     extraction_metrics = os.path.join(ext.output_dir, "extraction_metrics.csv")
     if os.path.exists(extraction_metrics):
         shutil.copy(extraction_metrics, artifacts_dir)  # extraction may be cached: copy it every run
