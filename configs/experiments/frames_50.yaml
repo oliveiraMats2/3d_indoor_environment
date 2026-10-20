@@ -139,6 +139,7 @@ sfm:                          # src/sfm/colmap.py + convert.py (COLMAP >= 4.0 CL
   ba_global_max_num_iterations: null  # null = COLMAP default (incremental only)
   ba_global_max_refinements: null     # null = COLMAP default (incremental only)
   project_quality: high       # project_generator --quality: low|medium|high|extreme
+  link_images: auto           # exports/colmap/images/: auto = hardlink, copy if refused | hardlink | symlink (relative) | copy
 
 scale:                        # src/sfm/scale.py
   enabled: true

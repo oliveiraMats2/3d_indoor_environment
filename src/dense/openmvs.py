@@ -163,7 +163,7 @@ def prepare_input(colmap: str, src_ws: Path, mvs_in: Path, frames_dir: Path, log
         shutil.rmtree(mvs_in)
     sparse = mvs_in / "sparse"
     sparse.mkdir(parents=True)
-    (mvs_in / "images").symlink_to((src_ws / "images").resolve(), target_is_directory=True)
+    (mvs_in / "images").symlink_to(os.path.relpath(src_ws / "images", mvs_in), target_is_directory=True)  # relative: movable
 
     convert = [colmap, "model_converter", "--input_path", str(src_ws / "sparse"), "--output_path", str(sparse),
                "--output_type", "TXT"]

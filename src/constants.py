@@ -93,6 +93,7 @@ class Sfm(Strict):
     min_num_matches: int = 15; multiple_models: bool = True
     ba_global_max_num_iterations: Optional[int] = None; ba_global_max_refinements: Optional[int] = None
     project_quality: Literal["low", "medium", "high", "extreme"] = "high"
+    link_images: Literal["auto", "hardlink", "symlink", "copy"] = "auto"  # how exports/colmap/images/ holds the frames
 
 class Click(Strict): image: str; x: float; y: float
 class ManualPair(Strict):

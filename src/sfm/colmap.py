@@ -36,6 +36,7 @@
 """COLMAP sparse reconstruction: features, matching, mapping, model selection and exports."""
 import functools
 import logging
+import os
 import re
 import shutil
 import struct
@@ -107,16 +108,38 @@ def list_frames(frames_dir: Path) -> list[Path]:
 
     return sorted({p for g in IMAGE_GLOBS for p in Path(frames_dir).glob(g)})
 
-def link_images(frames: list[Path], images_dir: Path) -> None:
-    """images/ holds only absolute symlinks to the current frames."""
+def link_images(frames: list[Path], images_dir: Path, mode: str = "auto") -> str:
+    """images/ holds only the current frames, as hardlinks (auto: hardlink, copy when the file system
+    refuses, e.g. another device), RELATIVE symlinks or copies, so exports/colmap/ can be moved or zipped.
+    Returns the mode used for the last frame."""
 
     images_dir.mkdir(parents=True, exist_ok=True)
     for old in images_dir.iterdir():
         if old.is_symlink() or old.is_file():
             old.unlink()
 
+    used = mode
     for frame in frames:
-        (images_dir / frame.name).symlink_to(frame.resolve())
+        dst = images_dir / frame.name
+        if mode == "symlink":
+            dst.symlink_to(os.path.relpath(frame.resolve(), images_dir.resolve()))
+            continue
+
+        if mode in ("auto", "hardlink"):
+            try:
+                os.link(frame, dst)
+                used = "hardlink"
+                continue
+            except OSError as exc:
+                if mode == "hardlink":
+                    raise
+                if used != "copy":
+                    log.warning("sfm: hardlink failed (%s): copying the frames into %s", exc, images_dir)
+
+        shutil.copy2(frame, dst)
+        used = "copy"
+
+    return used
 
 def resolve_intrinsics(scfg: dict, intr: dict, image_size: tuple[int, int] | None) -> list[float] | None:
     """Camera params for intrinsics=fixed (OPENCV: fx,fy,cx,cy,k1,k2,p1,p2; PINHOLE: fx,fy,cx,cy), else None."""
@@ -292,7 +315,8 @@ def _run(cmd: list[str], log_path: Path) -> float:
     return dt
 
 def export_model(scfg: dict, ws: Path, model: Path, cam_params: list[float] | None) -> None:
-    """TXT next to the .bin, sparse.ply, project.ini with absolute database/image paths."""
+    """TXT next to the .bin, sparse.ply, project.ini with paths RELATIVE to exports/colmap/ (portable:
+    open it with `cd exports/colmap && colmap gui --project_path project.ini`)."""
 
     exe, log_path = scfg["colmap_bin"], ws / "colmap.log"
     _run([exe, "model_converter", "--log_color", "0", "--input_path", str(model), "--output_path", str(model),
@@ -303,14 +327,15 @@ def export_model(scfg: dict, ws: Path, model: Path, cam_params: list[float] | No
     ini = ws / "project.ini"
     _run([exe, "project_generator", "--log_color", "0", "--output_path", str(ini),
           "--quality", scfg["project_quality"]], log_path)
-    values = {("", "database_path"): str((ws / "database.db").resolve()),
-              ("", "image_path"): str((ws / "images").resolve()),
+    values = {("", "database_path"): "database.db",
+              ("", "image_path"): "images",
               ("", "log_color"): "false",
               ("ImageReader", "camera_model"): scfg["camera_model"],
               ("ImageReader", "single_camera"): "true" if scfg["single_camera"] else "false"}
     if cam_params is not None:
         values[("ImageReader", "camera_params")] = ",".join(f"{p:.10g}" for p in cam_params)
     patch_ini(ini, values)
+    log.info("sfm: COLMAP GUI: cd %s && %s gui --project_path project.ini", ws, exe)
 
 def write_metrics(artifacts_dir: str, run_id, row: dict) -> None:
     """Merges this module's columns into the run_id row of sfm_metrics.csv (other sfm modules add theirs)."""
@@ -366,7 +391,8 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         stale.unlink(missing_ok=True)
     shutil.rmtree(ws / "sparse", ignore_errors=True)
     (ws / "sparse").mkdir()
-    link_images(frames, ws / "images")
+    linked = link_images(frames, ws / "images", scfg["link_images"])
+    log.info("sfm: %d frames in %s as %s", len(frames), ws / "images", linked)
     log.info("sfm: %d frames, matcher=%s, mapper=%s, intrinsics=%s, gpu=%s",
              len(frames), scfg["matcher"], scfg["mapper"], "fixed" if cam_params else "estimate", scfg["use_gpu"])
 
@@ -407,7 +433,8 @@ DEFAULTS = {"enabled": True, "rerun": False, "colmap_bin": "colmap", "camera_mod
             "matcher": "sequential", "sequential_overlap": 10, "loop_detection": False, "vocab_tree": None,
             "mapper": "incremental", "use_gpu": "auto", "gpu_index": "0", "ba_use_gpu": False,
             "max_image_size": 1920, "max_num_features": 8192, "min_num_matches": 15, "multiple_models": True,
-            "ba_global_max_num_iterations": None, "ba_global_max_refinements": None, "project_quality": "high"}
+            "ba_global_max_num_iterations": None, "ba_global_max_refinements": None, "project_quality": "high",
+            "link_images": "auto"}
 
 if __name__ == "__main__":
     import os
@@ -499,6 +526,24 @@ if __name__ == "__main__":
         assert "database_path=/d.db\n" in text and "image_path=/i\n" in text
         assert "camera_model=OPENCV" in text and "[ImageReader]\ncamera_params=1,2" in text
 
+        # images/: hardlinks (same inode), relative symlinks, copies; a rerun replaces the old entries
+        src_frames = tmp / "src_frames"
+        src_frames.mkdir()
+        fr = []
+        for k in range(3):
+            fr.append(src_frames / f"img_{k:04d}.png")
+            fr[-1].write_bytes(bytes([k]) * 10)
+        for mode, expect in (("auto", "hardlink"), ("hardlink", "hardlink"), ("copy", "copy"), ("symlink", "symlink")):
+            idir = tmp / "ws" / "images"
+            assert link_images(fr, idir, mode) == expect and sorted(p.name for p in idir.iterdir()) == [f.name for f in fr]
+            first = idir / fr[0].name
+            if expect == "hardlink":
+                assert first.stat().st_ino == fr[0].stat().st_ino and fr[0].stat().st_nlink > 1
+            elif expect == "symlink":
+                assert first.is_symlink() and not os.path.isabs(os.readlink(first)) and first.read_bytes() == fr[0].read_bytes()
+            else:
+                assert not first.is_symlink() and first.stat().st_ino != fr[0].stat().st_ino
+
         # metrics merge keeps columns written by other modules
         art = tmp / "art"
         stage_io.upsert_csv(art / "sfm_metrics.csv", {"run_id": "r1", "n_registered": 30}, key="run_id")
@@ -536,8 +581,9 @@ if __name__ == "__main__":
             model = run(cfg, str(tmp / "run"), str(art))
             assert model is not None and (model / "images.txt").exists()
             ws_dir = tmp / "run" / "exports" / "colmap"
-            assert (ws_dir / "sparse.ply").exists() and "database_path=" + str((ws_dir / "database.db").resolve()) \
-                in (ws_dir / "project.ini").read_text()
+            ini_text = (ws_dir / "project.ini").read_text()
+            assert (ws_dir / "sparse.ply").exists() and "database_path=database.db\n" in ini_text
+            assert "image_path=images\n" in ini_text
             print("smoke registered images:", count_registered(model), "/ 8")
             print("smoke metrics:", stage_io.read_csv(art / "sfm_metrics.csv")[-1])
             assert run(cfg, str(tmp / "run"), str(art)) == model  # reuse path
