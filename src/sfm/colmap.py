@@ -34,7 +34,9 @@
 
 # >>> BEGIN IMPLEMENTATION >>>
 """COLMAP sparse reconstruction: features, matching, mapping, model selection and exports."""
+import functools
 import logging
+import re
 import shutil
 import struct
 import subprocess
@@ -48,6 +50,54 @@ from src import stage_io
 log = logging.getLogger(__name__)
 
 IMAGE_GLOBS = ("img_*.png", "img_*.jpg", "img_*.jpeg")
+MIN_VERSION = (4, 0)  # FeatureExtraction.* / FeatureMatching.* option names and global_mapper are COLMAP 4.x
+
+def parse_banner(text: str) -> tuple[tuple[int, int] | None, bool]:
+    """((major, minor) or None, built with CUDA) from the first lines of `colmap -h`."""
+
+    m = re.search(r"COLMAP\s+(\d+)\.(\d+)", text)
+
+    return ((int(m.group(1)), int(m.group(2))) if m else None), "with CUDA" in text
+
+@functools.lru_cache(maxsize=None)
+def colmap_info(exe: str) -> dict:
+    """{path, version (major, minor) | None, cuda}: cuda = COLMAP built with CUDA AND `nvidia-smi -L` lists a
+    GPU. path None when the binary is not on PATH. Cached: every stage asks the same binary once."""
+
+    path = shutil.which(exe)
+    if path is None:
+        return {"path": None, "version": None, "cuda": False}
+
+    try:
+        out = subprocess.run([path, "-h"], capture_output=True, text=True, timeout=60)
+        version, cuda_build = parse_banner(out.stdout + out.stderr)
+    except (OSError, subprocess.TimeoutExpired):
+        version, cuda_build = None, False
+
+    gpu = False
+    if cuda_build and shutil.which("nvidia-smi"):
+        try:
+            gpu = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, timeout=30).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            gpu = False
+
+    info = {"path": path, "version": version, "cuda": cuda_build and gpu}
+    log.info("colmap_info %s: version %s, CUDA build %s, GPU visible %s", path,
+             ".".join(map(str, version)) if version else "unknown", cuda_build, gpu)
+
+    return info
+
+def resolve_gpu(value, info: dict) -> bool:
+    """sfm.use_gpu true | false | "auto" -> bool. auto = CUDA available; true without CUDA -> WARNING, CPU."""
+
+    if value == "auto":
+        return bool(info["cuda"])
+
+    if value and not info["cuda"]:
+        log.warning("sfm.use_gpu=true but COLMAP has no CUDA build or no GPU is visible: using CPU")
+        return False
+
+    return bool(value)
 
 def _b(value) -> str:
 
@@ -278,9 +328,17 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         log.info("sfm disabled")
         return None
 
-    if shutil.which(scfg["colmap_bin"]) is None:
+    info = colmap_info(scfg["colmap_bin"])
+    if info["path"] is None:
         log.warning("COLMAP binary '%s' not found: sfm skipped", scfg["colmap_bin"])
         return None
+
+    if info["version"] is None or info["version"] < MIN_VERSION:
+        log.warning("COLMAP %s at %s: need >= %d.%d (brew/conda-forge ship 4.x): sfm skipped",
+                    info["version"] or "of unknown version", info["path"], *MIN_VERSION)
+        return None
+
+    scfg = {**scfg, "use_gpu": resolve_gpu(scfg["use_gpu"], info)}
 
     ws = Path(run_dir) / "exports" / "colmap"
     model = ws / "sparse" / "0"
@@ -293,7 +351,10 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
     if not scfg["rerun"] and (model / "images.bin").exists():
         log.info("sfm: reusing existing model %s (%d images; sfm.rerun=false)", model, count_registered(model))
         if not (ws / "sparse.ply").exists() or not (ws / "project.ini").exists() or not (model / "images.txt").exists():
-            export_model(scfg, ws, model, cam_params)
+            try:
+                export_model(scfg, ws, model, cam_params)
+            except subprocess.CalledProcessError:
+                log.warning("sfm: exporting the reused model failed (see %s)", ws / "colmap.log")
         return model
 
     if len(frames) < 2:
@@ -312,7 +373,17 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
     cmds = build_commands(scfg, ws, cam_params, int(cfg["run"]["seed"]))
     log_path = ws / "colmap.log"
     t0 = time.perf_counter()
-    times = {f"t_{step}_s": round(_run(cmds[step], log_path), 2) for step in ("feature", "match", "mapper")}
+    times = {}
+    for step in ("feature", "match", "mapper"):
+        try:
+            times[f"t_{step}_s"] = round(_run(cmds[step], log_path), 2)
+        except subprocess.CalledProcessError as exc:
+            log.warning("sfm: COLMAP %s failed with exit code %s (see %s): sfm stopped", cmds[step][1],
+                        exc.returncode, log_path)
+            write_metrics(artifacts_dir, run_id, {**times, "t_total_s": round(time.perf_counter() - t0, 2),
+                                                  "matcher": scfg["matcher"], "mapper": scfg["mapper"],
+                                                  "failed_step": step})
+            return None
 
     best, n_reg = pick_best_model(ws / "sparse")
     if best is None or n_reg == 0:
@@ -321,7 +392,10 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
                                               "matcher": scfg["matcher"], "mapper": scfg["mapper"]})
         return None
 
-    export_model(scfg, ws, best, cam_params)
+    try:
+        export_model(scfg, ws, best, cam_params)
+    except subprocess.CalledProcessError:
+        log.warning("sfm: exporting the model failed (see %s); sparse/0 is kept", log_path)
     log.info("sfm: sparse/0 has %d/%d registered images", n_reg, len(frames))
     write_metrics(artifacts_dir, run_id, {**times, "t_total_s": round(time.perf_counter() - t0, 2),
                                           "matcher": scfg["matcher"], "mapper": scfg["mapper"]})
@@ -331,13 +405,15 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
 DEFAULTS = {"enabled": True, "rerun": False, "colmap_bin": "colmap", "camera_model": "OPENCV",
             "single_camera": True, "intrinsics": "estimate", "fixed_dist": [0.0, 0.0, 0.0, 0.0],
             "matcher": "sequential", "sequential_overlap": 10, "loop_detection": False, "vocab_tree": None,
-            "mapper": "incremental", "use_gpu": True, "gpu_index": "0", "ba_use_gpu": False,
+            "mapper": "incremental", "use_gpu": "auto", "gpu_index": "0", "ba_use_gpu": False,
             "max_image_size": 1920, "max_num_features": 8192, "min_num_matches": 15, "multiple_models": True,
             "ba_global_max_num_iterations": None, "ba_global_max_refinements": None, "project_quality": "high"}
 
 if __name__ == "__main__":
     import os
     import tempfile
+
+    import numpy as np
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     ws = Path("/w")
@@ -346,7 +422,15 @@ if __name__ == "__main__":
         return cmd[cmd.index(name) + 1] if name in cmd else None
 
     # sequential + incremental + estimate
-    c = build_commands(DEFAULTS, ws, None, 7)
+    assert parse_banner("COLMAP 4.2.0 (Commit Unknown on Unknown with CUDA)\nUsage:") == ((4, 2), True)
+    assert parse_banner("COLMAP 3.9.1 (Commit abc on 2024 without CUDA)") == ((3, 9), False)
+    assert parse_banner("garbage") == (None, False)
+    assert resolve_gpu("auto", {"cuda": True}) and not resolve_gpu("auto", {"cuda": False})
+    assert not resolve_gpu(True, {"cuda": False}) and resolve_gpu(True, {"cuda": True}) and not resolve_gpu(False, {"cuda": True})
+    assert colmap_info("no_such_colmap_bin") == {"path": None, "version": None, "cuda": False}
+    print("colmap_info(colmap):", colmap_info("colmap"))
+
+    c = build_commands({**DEFAULTS, "use_gpu": True}, ws, None, 7)
     assert c["feature"][:2] == ["colmap", "feature_extractor"] and "--ImageReader.camera_params" not in c["feature"]
     assert flag(c["feature"], "--FeatureExtraction.gpu_index") == "0" and flag(c["feature"], "--FeatureExtraction.use_gpu") == "1"
     assert flag(c["feature"], "--FeatureExtraction.max_image_size") == "1920"
@@ -421,6 +505,20 @@ if __name__ == "__main__":
         write_metrics(str(art), "r1", {"t_total_s": 1.5, "matcher": "sequential"})
         rows = stage_io.read_csv(art / "sfm_metrics.csv")
         assert len(rows) == 1 and rows[0]["n_registered"] == "30" and rows[0]["t_total_s"] == "1.5"
+
+        # a COLMAP that fails at feature_extractor -> WARNING, metrics written, None (main.py keeps going)
+        fake = tmp / "fake_colmap"
+        fake.write_text("#!/bin/sh\n[ \"$1\" = -h ] && echo 'COLMAP 4.1.0 (Commit x without CUDA)' && exit 0\nexit 3\n")
+        fake.chmod(0o755)
+        fdir = tmp / "ff"
+        fdir.mkdir()
+        for k in range(2):
+            cv2.imwrite(str(fdir / f"img_{k:04d}.png"), np.zeros((8, 8, 3), np.uint8))
+        fcfg = {"run": {"id": "fail", "seed": 0}, "extraction": {"output_dir": str(fdir)},
+                "geometry": {"intrinsics": {"fx": None}}, "sfm": {**DEFAULTS, "colmap_bin": str(fake)}}
+        assert run(fcfg, str(tmp / "frun"), str(art)) is None
+        row = [r for r in stage_io.read_csv(art / "sfm_metrics.csv") if r["run_id"] == "fail"][0]
+        assert row["failed_step"] == "feature", row
 
         # missing binary -> None
         assert run({"sfm": {**DEFAULTS, "colmap_bin": "no_such_colmap_bin"}}, str(tmp), str(art)) is None

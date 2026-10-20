@@ -17,7 +17,7 @@
 # ╚══════════════════════════════════════════════════════════════════════════════════════╝
 
 """YAML schema: every block of the config with its default value. Unknown keys fail validation."""
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -88,7 +88,7 @@ class Sfm(Strict):
     single_camera: bool = True; intrinsics: Literal["estimate", "fixed"] = "estimate"
     fixed_dist: list[float] = [0.0, 0.0, 0.0, 0.0]; matcher: Literal["sequential", "exhaustive"] = "sequential"
     sequential_overlap: int = 10; loop_detection: bool = False; vocab_tree: Optional[str] = None
-    mapper: Literal["incremental", "global"] = "incremental"; use_gpu: bool = True; gpu_index: str = "0"
+    mapper: Literal["incremental", "global"] = "incremental"; use_gpu: Union[bool, Literal["auto"]] = "auto"; gpu_index: str = "0"
     ba_use_gpu: bool = False; max_image_size: int = 1920; max_num_features: int = 8192
     min_num_matches: int = 15; multiple_models: bool = True
     ba_global_max_num_iterations: Optional[int] = None; ba_global_max_refinements: Optional[int] = None

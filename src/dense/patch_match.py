@@ -40,21 +40,16 @@ from pathlib import Path
 import numpy as np
 
 from src import stage_io
+from src.sfm.colmap import colmap_info
 
 log = logging.getLogger(__name__)
 
 METHOD = "patch_match"
 
 def cuda_available(colmap: str) -> bool:
+    """COLMAP built with CUDA and a visible NVIDIA GPU (shared, cached check of src/sfm/colmap.py)."""
 
-    if shutil.which("nvidia-smi") is None or shutil.which(colmap) is None:
-        return False
-    try:
-        out = subprocess.run([colmap, "-h"], capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-    return "with CUDA" in (out.stdout + out.stderr)
+    return colmap_info(colmap)["cuda"]
 
 def read_exclude(frames_dir) -> set[str]:
     """Stems of the frames listed in mvs_exclude.txt (one name per line, extension optional)."""
