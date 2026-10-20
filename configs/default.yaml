@@ -17,21 +17,22 @@ extraction:                   # src/extrair_quadros.py
   video: video_preview.MOV
   output_dir: null            # null = <ws>/frames/<tag>; shared by every experiment with the same tag
   tag: null                   # null = SHA-1[:8] of this block without rerun/tag/output_dir (same params -> same frames)
-  min_frames: 100
-  max_frames: 300
-  overlap: 0.70               # initial overlap target (0.60 to 0.80)
+  selection: all              # all = every stride-th frame, dropped only by extraction.blur (overlap/sharp_percentile ignored) | overlap = greedy overlap selection
+  min_frames: 100             # all: only warns below it | overlap: lower bound of the target adjustment
+  max_frames: null            # null = no cap; all: uniform subsample down to it | overlap: upper bound of the adjustment
+  overlap: 0.70               # initial overlap target (0.60 to 0.80); overlap mode only
   overlap_min: 0.60
   overlap_max: 0.80
   overlap_step: 0.025
-  max_adjust_iters: 12
-  stride: 2                   # analyze 1 of every N video frames
+  max_adjust_iters: 12        # overlap mode only
+  stride: 1                   # analyze 1 of every N video frames (1 = every frame)
   analysis_width: 640
   nfeatures: 1000             # ORB features used only to estimate overlap
   lowe_ratio: 0.75
   min_good_matches: 15
   ransac_threshold_px: 3.0
   min_inliers: 12
-  sharp_percentile: 25        # drop the blurriest 25% of sampled frames before selection
+  sharp_percentile: 25        # overlap mode only: drop the blurriest 25% of sampled frames before selection
   max_width: 1920             # max width of saved frames
   image_format: png           # png = lossless; jpg allowed
   jpeg_quality: 95
@@ -64,6 +65,7 @@ detection:                    # src/detectores.py
   nfeatures: 5000
   reps: 30
   warmup: 2
+  max_frames: 100             # uniform subsample of the quality-kept frames fed to detection/matching/geometry/two_view; null = all (COLMAP always uses every frame)
 
 report:                       # src/relatorio.py
   max_figures: 5
@@ -213,10 +215,10 @@ export:                       # src/export/meshlab.py (MeshLab project + filter 
 
 viewer:                       # src/viewer.py (python view.py --config <this file>)
   cloud: sparse               # sparse | patch_match | openmvs | mesh
-  record: false               # true: record the orbit to mp4; false: interactive window
+  record: true                # true: record the orbit to <run_dir>/videos/navigation_<cloud>_<seconds>s.mp4; false: interactive window
   seconds: 45
   fps: 30
-  offscreen: false            # true: OffscreenRenderer; false: hidden Open3D window
+  offscreen: true             # true: OffscreenRenderer (works without a display); false: hidden Open3D window
   width: 1280
   height: 720
   frustum_cm: 20
@@ -237,7 +239,7 @@ evaluation:                   # src/evaluation
   enabled: true
   measured_cm: []             # [{name: room_width|room_length|ceiling_height, value_cm}] measured by hand
   ablation_runs: []           # run ids to compare (configs/experiments/ablation.yaml)
-  loop_closed: null           # does the video start and end at the same spot? null | true | false
+  loop_closed: false          # video_preview.MOV: first/last frames overlap but the path is an arc, not a full loop | null = unknown | true
   hard_regions: true          # smooth vs textured wall reprojection (needs planes)
   texture_radius_px: 30       # radius of local keypoint density
   texture_split_quantile: 0.5 # texture quantile splitting smooth_wall / textured_wall

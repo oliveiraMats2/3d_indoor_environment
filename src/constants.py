@@ -34,9 +34,10 @@ class ExtractionBlur(Strict):
 
 class Extraction(Strict):
     rerun: bool = False; video: str = "video_preview.MOV"; output_dir: Optional[str] = None; tag: Optional[str] = None  # None = derived
-    min_frames: int = 100; max_frames: int = 300
+    selection: Literal["all", "overlap"] = "all"  # all = every stride-th frame minus blur drops; overlap = greedy overlap selection
+    min_frames: int = 100; max_frames: Optional[int] = None  # None = no cap
     overlap: float = 0.70; overlap_min: float = 0.60; overlap_max: float = 0.80; overlap_step: float = 0.025
-    max_adjust_iters: int = 12; stride: int = 2; analysis_width: int = 640; nfeatures: int = 1000
+    max_adjust_iters: int = 12; stride: int = 1; analysis_width: int = 640; nfeatures: int = 1000
     lowe_ratio: float = 0.75; min_good_matches: int = 15; ransac_threshold_px: float = 3.0; min_inliers: int = 12
     sharp_percentile: float = 25; max_width: int = 1920; image_format: Literal["png", "jpg"] = "png"; jpeg_quality: int = 95
     blur: ExtractionBlur = ExtractionBlur()
@@ -53,6 +54,7 @@ class FrameQuality(Strict):
 class Detection(Strict):
     methods: list[Literal["sift", "orb", "akaze"]] = ["sift", "orb", "akaze"]
     nfeatures: int = 5000; reps: int = 30; warmup: int = 2
+    max_frames: Optional[int] = 100  # uniform subsample of the quality-kept frames for the 2D stages; None = all
 
 class Report(Strict): max_figures: int = 5; max_rows: int = 20
 class Filters(Strict): lowe_ratio: float = 0.75; min_matches: int = 10
