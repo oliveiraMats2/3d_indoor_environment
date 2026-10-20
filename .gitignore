@@ -4,7 +4,7 @@ __pycache__/
 *.egg-info/
 
 # workspaces: video_<name>.MOV and its outputs video_<name>/{frames,results,artifacts}
-video_*
+/video_*
 
 # videos
 videos/
@@ -20,7 +20,6 @@ colmap_*/
 *.ply
 
 # legacy root outputs (remove these lines after deleting the old folders)
-3d_image_video*
 frames/
 artifacts/
 results/
