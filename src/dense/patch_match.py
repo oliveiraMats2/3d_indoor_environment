@@ -60,6 +60,25 @@ def read_exclude(frames_dir) -> set[str]:
 
     return {Path(line.strip()).stem for line in path.read_text().splitlines() if line.strip()}
 
+def registered_names(sparse_dir) -> list[str]:
+    """Registered image names of a COLMAP model, sorted: images.txt (rows of 10 tokens), else pycolmap on the
+    .bin model, else []."""
+
+    txt = Path(sparse_dir) / "images.txt"
+    if txt.exists():
+        rows = [l.split() for l in txt.read_text().splitlines() if l.strip() and not l.startswith("#")]
+        return sorted(r[9] for r in rows if len(r) == 10)
+    try:
+        import pycolmap
+        return sorted(im.name for im in pycolmap.Reconstruction(str(sparse_dir)).images.values())
+    except (ImportError, ValueError, RuntimeError):
+        return []
+
+def ref_step_exclude(names: list[str], ref_step: int) -> set[str]:
+    """Stems of the names (sorted) that are NOT an MVS reference: index % ref_step != 0."""
+
+    return {Path(n).stem for i, n in enumerate(sorted(names)) if i % max(int(ref_step), 1) != 0}
+
 def rewrite_stereo_cfgs(stereo_dir, exclude: set[str]) -> tuple[int, int]:
     """Drop excluded references from patch-match.cfg (pairs: name line + sources line) and fusion.cfg
     (one name per line). Returns (n_references_kept, n_removed)."""
@@ -142,7 +161,8 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
     csv_path = Path(artifacts_dir) / "dense_metrics.csv"
     colmap_dir = Path(run_dir) / "exports" / "colmap"
     row = {"method": METHOD, "n_dense": "", "t_s": "", "max_image_size": dense["max_image_size"],
-           "t_undistort_s": "", "t_patch_match_s": "", "t_fusion_s": "", "n_ref_images": "", "n_excluded": ""}
+           "t_undistort_s": "", "t_patch_match_s": "", "t_fusion_s": "", "n_ref_images": "", "n_excluded": "",
+           "backend": "", "ref_step": dense.get("ref_step", 1)}
 
     if fused.exists() and not dense["rerun"]:
         log.info("reusing %s (dense.rerun=false)", fused)
@@ -156,7 +176,12 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         return fused
 
     colmap = cfg.get("sfm", {}).get("colmap_bin", "colmap")
-    if not cuda_available(colmap):
+    from src.dense import pycolmap_dense  # sfm.backend: CLI is primary, pycolmap when chosen / no binary
+    row["backend"] = pycolmap_dense.resolve_backend(cfg)
+    if row["backend"] == "pycolmap" and not pycolmap_dense.cuda_available():
+        log.warning("dense patch_match skipped: CUDA not available (nvidia-smi or pycolmap.has_cuda missing)")
+        return None
+    if row["backend"] == "cli" and not cuda_available(colmap):
         log.warning("dense patch_match skipped: CUDA not available (nvidia-smi or CUDA-enabled %s missing)", colmap)
         return None
     if not (colmap_dir / "sparse" / "0").is_dir():
@@ -168,16 +193,20 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path.write_text("")
     exclude = read_exclude(cfg["extraction"]["output_dir"])
+    exclude |= ref_step_exclude(registered_names(colmap_dir / "sparse" / "0"), row["ref_step"])
     cmds = build_commands(colmap, colmap_dir / "images", colmap_dir / "sparse" / "0", ws, fused, dense,
                           allow_missing=bool(exclude))
 
     try:
-        row["t_undistort_s"] = round(run_cmd(cmds["undistort"], log_path), 2)
-        n_ref, n_removed = rewrite_stereo_cfgs(ws / "stereo", exclude)
-        row["n_ref_images"], row["n_excluded"] = n_ref, n_removed
-        log.info("MVS references: %d (excluded %d from mvs_exclude.txt)", n_ref, n_removed)
-        row["t_patch_match_s"] = round(run_cmd(cmds["patch_match"], log_path), 2)
-        row["t_fusion_s"] = round(run_cmd(cmds["fusion"], log_path), 2)
+        if row["backend"] == "pycolmap":
+            pycolmap_dense.run_steps(colmap_dir, ws, fused, dense, exclude, row, log_path)
+        else:
+            row["t_undistort_s"] = round(run_cmd(cmds["undistort"], log_path), 2)
+            n_ref, n_removed = rewrite_stereo_cfgs(ws / "stereo", exclude)
+            row["n_ref_images"], row["n_excluded"] = n_ref, n_removed
+            log.info("MVS references: %d (excluded %d: mvs_exclude.txt + ref_step)", n_ref, n_removed)
+            row["t_patch_match_s"] = round(run_cmd(cmds["patch_match"], log_path), 2)
+            row["t_fusion_s"] = round(run_cmd(cmds["fusion"], log_path), 2)
     except RuntimeError as exc:
         log.warning("dense patch_match failed: %s", exc)
         return None
@@ -227,6 +256,13 @@ if __name__ == "__main__":
         assert rewrite_stereo_cfgs(stereo, exclude) == (2, 2)
         assert (stereo / "patch-match.cfg").read_text() == "img_0000.png\n__auto__, 20\nimg_0002.png\n__auto__, 20\n"
         assert (stereo / "fusion.cfg").read_text() == "img_0000.png\nimg_0002.png\n"
+        sp = tmp / "sparse0"
+        sp.mkdir()
+        (sp / "images.txt").write_text("# header\n" + "".join(
+            f"{i + 1} 1 0 0 0 0 0 0 1 img_{i:04d}.png\n1.0 2.0 -1\n" for i in (4, 0, 3, 1, 2)))
+        assert registered_names(sp) == [f"img_{i:04d}.png" for i in range(5)]
+        assert ref_step_exclude(registered_names(sp), 2) == {"img_0001", "img_0003"}
+        assert ref_step_exclude(registered_names(sp), 1) == set() and registered_names(tmp / "nope") == []
 
         cfg = {"dense": {**dense_cfg, "enabled": False}, "extraction": {"output_dir": str(tmp)}}
         assert run(cfg, str(tmp / "run"), str(tmp / "art")) is None
