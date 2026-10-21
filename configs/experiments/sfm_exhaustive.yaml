@@ -2,7 +2,7 @@
 # sfm_exhaustive
 #   axis     : sfm.matcher
 #   variant  : exhaustive
-#   output   : video_preview/results/sfm_exhaustive/
+#   output   : 3d_image_video/results/sfm_exhaustive/
 #
 # Full copy of configs/default.yaml, with ONE SINGLE line changed (marked
 # with 'axis of this copy'). No inheritance: this file reads on its own.
@@ -23,7 +23,7 @@ run:
 
 extraction:                   # src/extrair_quadros.py
   rerun: false                # true = extract again (old img_* and selecao.csv in output_dir are deleted); false = reuse frames if selecao.csv exists
-  video: video_preview.MOV
+  video: 3d_image_video.MOV
   output_dir: null            # null = <ws>/frames/<tag>; shared by every experiment with the same tag
   tag: null                   # null = SHA-1[:8] of this block without rerun/tag/output_dir (same params -> same frames)
   selection: all              # all = every stride-th frame, dropped only by extraction.blur (overlap/sharp_percentile ignored) | overlap = greedy overlap selection
@@ -103,9 +103,9 @@ geometry:                     # src/epipolar (F/E and RANSAC)
     threshold_px: 1.0
     confidence: 0.999
     max_iters: 5000
-  # COLMAP OPENCV calibration of colmap_gpu/ (same video, 1920x1080); used only by the two-view stages
+  # used only by the two-view stages (and by sfm.intrinsics: fixed); video_preview.MOV landscape 1920x1080 was fx 1476.32, fy 1471.86, cx 960, cy 540 (colmap_gpu/)
   # (and by sfm.intrinsics: fixed). null fx/fy -> max(w, h); null cx/cy -> w/2, h/2
-  intrinsics: {fx: 1476.32, fy: 1471.86, cx: 960, cy: 540}
+  intrinsics: {fx: null, fy: null, cx: null, cy: null}  # 3d_image_video.MOV is portrait: estimated from the frame size (COLMAP estimates its own)
 
 visualize:
   matches:
@@ -264,7 +264,7 @@ evaluation:                   # src/evaluation
   enabled: true
   measured_cm: []             # [{name: room_width|room_length|ceiling_height, value_cm}] measured by hand
   ablation_runs: []           # run ids to compare (configs/experiments/ablation.yaml)
-  loop_closed: false          # video_preview.MOV: first/last frames overlap but the path is an arc, not a full loop | null = unknown | true
+  loop_closed: null           # unknown for 3d_image_video.MOV | false | true
   hard_regions: true          # smooth vs textured wall reprojection (needs planes)
   texture_radius_px: 30       # radius of local keypoint density
   texture_split_quantile: 0.5 # texture quantile splitting smooth_wall / textured_wall
