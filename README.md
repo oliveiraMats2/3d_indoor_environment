@@ -14,6 +14,7 @@ Requirements:
 | OS | glibc >= 2.35 (Ubuntu 22.04+), x86_64 or aarch64 | 13+ on Apple silicon (arm64), 14+ on Intel |
 | Python | 3.10 to 3.12 | 3.10 to 3.12 (Intel: open3d 0.19, the last release with Intel wheels) |
 | COLMAP >= 4.0 | with CUDA: conda-forge (`micromamba create -n colmap -c conda-forge colmap`) or built from source | `brew install colmap` (CPU only) |
+| pycolmap 4.x (optional) | only without the `colmap` CLI: `uv sync --extra cuda` (NVIDIA, x86_64) or `--extra cpu` | `uv sync --extra cpu` (arm64, macOS 14+) |
 | OpenMVS (optional) | build from source (https://github.com/cdcseacave/openMVS/wiki/Building) | same; there is no brew or conda package |
 | NVIDIA GPU + driver | optional: GPU SIFT/matching and patch-match stereo | not available |
 
@@ -31,8 +32,14 @@ inside the activated `.venv`. The platform-specific pins (open3d 0.19 vs 0.20, p
 in `pyproject.toml`, so the same commands work on Linux and macOS. Activate `.venv` before running anything:
 `main.py`, `view.py` and `run.sh` call the `python3` on `PATH`.
 
-COLMAP must be on `PATH` (or set `sfm.colmap_bin`). Missing or older than 4.0 -> WARNING and the SfM stage is
-skipped. OpenMVS is looked up on `PATH` (or `dense.openmvs.bin_dir`); missing -> WARNING, `openmvs` skipped.
+COLMAP must be on `PATH` (or set `sfm.colmap_bin`). Missing or older than 4.0 -> the SfM stage falls back to
+pycolmap when it is installed (`sfm.backend: auto`; same outputs and CSV columns, column `backend` says which
+ran), else WARNING and the stage is skipped. pycolmap is optional and not in the base install. Pick ONE extra,
+they are mutually exclusive (both provide the `pycolmap` module): `uv sync --extra cuda` (pycolmap-cuda12,
+Linux x86_64 + NVIDIA) or `uv sync --extra cpu` (pycolmap: Linux x86_64, macOS arm64 14+, Windows); with
+`uv pip install -r pyproject.toml` add `--extra cuda` or `--extra cpu`; with pip install only one of
+`"pycolmap-cuda12>=4.2,<5"` or `"pycolmap>=4.2,<5"` (`pip uninstall pycolmap` first when switching to cuda).
+OpenMVS is looked up on `PATH` (or `dense.openmvs.bin_dir`); missing -> WARNING, `openmvs` skipped.
 
 What changes on macOS (no CUDA):
 
@@ -318,6 +325,7 @@ Generated from `src/constants.py` and the comments of `configs/default.yaml`; bl
 | `sfm.ba_global_max_refinements` | `null` | null = COLMAP default (incremental only) |
 | `sfm.project_quality` | `high` | project_generator --quality: low\|medium\|high\|extreme |
 | `sfm.link_images` | `auto` | exports/colmap/images/: auto = hardlink, copy if refused \| hardlink \| symlink (relative) \| copy |
+| `sfm.backend` | `auto` | auto = COLMAP CLI when colmap_bin is found (primary), else pycolmap (uv sync --extra cpu\|cuda) \| cli \| pycolmap |
 | **`scale`** | | src/sfm/scale.py |
 | `scale.enabled` | `true` | metric scale from ArUco markers or manual pairs |
 | `scale.method` | `aruco` | aruco \| manual |

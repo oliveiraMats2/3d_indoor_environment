@@ -131,6 +131,7 @@ sfm:                          # src/sfm/colmap.py + convert.py (COLMAP >= 4.0 CL
   ba_global_max_refinements: null     # null = COLMAP default (incremental only)
   project_quality: high       # project_generator --quality: low|medium|high|extreme
   link_images: auto           # exports/colmap/images/: auto = hardlink, copy if refused | hardlink | symlink (relative) | copy
+  backend: auto               # auto = COLMAP CLI when colmap_bin is found (primary), else pycolmap (uv sync --extra cpu|cuda) | cli | pycolmap
 
 scale:                        # src/sfm/scale.py
   enabled: true

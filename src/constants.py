@@ -94,6 +94,7 @@ class Sfm(Strict):
     ba_global_max_num_iterations: Optional[int] = None; ba_global_max_refinements: Optional[int] = None
     project_quality: Literal["low", "medium", "high", "extreme"] = "high"
     link_images: Literal["auto", "hardlink", "symlink", "copy"] = "auto"  # how exports/colmap/images/ holds the frames
+    backend: Literal["auto", "cli", "pycolmap"] = "auto"  # auto = COLMAP CLI when sfm.colmap_bin is found, else pycolmap
 
 class Click(Strict): image: str; x: float; y: float
 class ManualPair(Strict):

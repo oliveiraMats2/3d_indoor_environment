@@ -27,7 +27,10 @@
 #         fixed_dist [k1,k2,p1,p2], matcher (sequential|exhaustive), sequential_overlap, loop_detection,
 #         vocab_tree, mapper (incremental|global), use_gpu, gpu_index, ba_use_gpu, max_image_size,
 #         max_num_features, min_num_matches, multiple_models, ba_global_max_num_iterations,
-#         ba_global_max_refinements, project_quality}.
+#         ba_global_max_refinements, project_quality, backend (auto|cli|pycolmap)}.
+# Backend: the COLMAP CLI below is the primary path. backend(cfg) picks it whenever sfm.colmap_bin is a
+#         COLMAP >= 4.0 (auto); pycolmap (src/sfm/pycolmap_backend.py, same outputs and CSV columns) only
+#         when the binary is missing or with sfm.backend: pycolmap.
 # Rules : colmap missing -> WARNING and return None. sfm.rerun false and sparse/0/images.bin present ->
 #         reuse. loop_detection without vocab_tree -> WARNING, disabled. intrinsics fixed with fx null ->
 #         WARNING, estimate. Every command appends stdout/stderr to colmap.log, check=True, timed.
@@ -35,6 +38,7 @@
 # >>> BEGIN IMPLEMENTATION >>>
 """COLMAP sparse reconstruction: features, matching, mapping, model selection and exports."""
 import functools
+import importlib.util
 import logging
 import os
 import re
@@ -87,6 +91,33 @@ def colmap_info(exe: str) -> dict:
              ".".join(map(str, version)) if version else "unknown", cuda_build, gpu)
 
     return info
+
+@functools.lru_cache(maxsize=None)
+def _backend(requested: str, exe: str) -> str:
+
+    info = colmap_info(exe)
+    cli_ok = info["path"] is not None and info["version"] is not None and info["version"] >= MIN_VERSION
+    py_ok = importlib.util.find_spec("pycolmap") is not None
+    if requested == "cli" or (requested == "auto" and (cli_ok or not py_ok)):
+        chosen = "cli"
+    elif requested == "pycolmap" and not py_ok:
+        log.warning("sfm.backend=pycolmap but pycolmap is not installed (uv sync --extra cpu|cuda): %s",
+                    "using the COLMAP CLI" if cli_ok else "sfm will be skipped")
+        chosen = "cli"
+    else:
+        chosen = "pycolmap"
+    log.info("sfm backend: %s (requested %s; CLI %s usable %s, pycolmap installed %s)", chosen, requested, exe,
+             cli_ok, py_ok)
+
+    return chosen
+
+def backend(cfg: dict) -> str:
+    """"cli" | "pycolmap" for cfg["sfm"]["backend"] (auto = CLI when sfm.colmap_bin is a COLMAP >= 4.0, else
+    pycolmap when importable, else "cli", whose run() then skips with a WARNING). Resolved once per process."""
+
+    scfg = cfg["sfm"]
+
+    return _backend(scfg.get("backend", "auto"), scfg["colmap_bin"])
 
 def resolve_gpu(value, info: dict) -> bool:
     """sfm.use_gpu true | false | "auto" -> bool. auto = CUDA available; true without CUDA -> WARNING, CPU."""
@@ -337,11 +368,12 @@ def export_model(scfg: dict, ws: Path, model: Path, cam_params: list[float] | No
     patch_ini(ini, values)
     log.info("sfm: COLMAP GUI: cd %s && %s gui --project_path project.ini", ws, exe)
 
-def write_metrics(artifacts_dir: str, run_id, row: dict) -> None:
+def write_metrics(artifacts_dir: str, run_id, row: dict, backend_name: str = "cli") -> None:
     """Merges this module's columns into the run_id row of sfm_metrics.csv (other sfm modules add theirs)."""
 
     path = Path(artifacts_dir) / "sfm_metrics.csv"
     old = next((r for r in stage_io.read_csv(path) if r.get("run_id") == str(run_id)), {})
+    row = {"backend": backend_name, **row}
     stage_io.upsert_csv(path, {**old, "run_id": run_id, **row}, key="run_id")
     stage_io.log_metrics(log, row)
 
@@ -352,6 +384,10 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
     if not scfg["enabled"]:
         log.info("sfm disabled")
         return None
+
+    if backend(cfg) == "pycolmap":
+        from src.sfm import pycolmap_backend
+        return pycolmap_backend.run(cfg, run_dir, artifacts_dir)
 
     info = colmap_info(scfg["colmap_bin"])
     if info["path"] is None:
@@ -434,7 +470,7 @@ DEFAULTS = {"enabled": True, "rerun": False, "colmap_bin": "colmap", "camera_mod
             "mapper": "incremental", "use_gpu": "auto", "gpu_index": "0", "ba_use_gpu": False,
             "max_image_size": 1920, "max_num_features": 8192, "min_num_matches": 15, "multiple_models": True,
             "ba_global_max_num_iterations": None, "ba_global_max_refinements": None, "project_quality": "high",
-            "link_images": "auto"}
+            "link_images": "auto", "backend": "auto"}
 
 if __name__ == "__main__":
     import os
@@ -550,6 +586,14 @@ if __name__ == "__main__":
         write_metrics(str(art), "r1", {"t_total_s": 1.5, "matcher": "sequential"})
         rows = stage_io.read_csv(art / "sfm_metrics.csv")
         assert len(rows) == 1 and rows[0]["n_registered"] == "30" and rows[0]["t_total_s"] == "1.5"
+        assert rows[0]["backend"] == "cli"
+
+        # backend dispatch: auto = CLI when the binary is usable; explicit cli is kept
+        assert backend({"sfm": {**DEFAULTS, "backend": "cli", "colmap_bin": "no_such_colmap_bin"}}) == "cli"
+        py = importlib.util.find_spec("pycolmap") is not None
+        assert backend({"sfm": {**DEFAULTS, "colmap_bin": "no_such_colmap_bin"}}) == ("pycolmap" if py else "cli")
+        if colmap_info("colmap")["path"]:
+            assert backend({"sfm": DEFAULTS}) == "cli"
 
         # a COLMAP that fails at feature_extractor -> WARNING, metrics written, None (main.py keeps going)
         fake = tmp / "fake_colmap"
@@ -565,8 +609,8 @@ if __name__ == "__main__":
         row = [r for r in stage_io.read_csv(art / "sfm_metrics.csv") if r["run_id"] == "fail"][0]
         assert row["failed_step"] == "feature", row
 
-        # missing binary -> None
-        assert run({"sfm": {**DEFAULTS, "colmap_bin": "no_such_colmap_bin"}}, str(tmp), str(art)) is None
+        # missing binary (and backend cli) -> None
+        assert run({"sfm": {**DEFAULTS, "colmap_bin": "no_such_colmap_bin", "backend": "cli"}}, str(tmp), str(art)) is None
 
         # optional real smoke run (env SFM_SMOKE=1) on 8 frames from <repo>/frames (sequential + incremental, GPU)
         src = Path(__file__).resolve().parents[2] / "frames"
