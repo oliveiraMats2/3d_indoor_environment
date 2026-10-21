@@ -37,8 +37,12 @@ optionally records an orbit video."""
 #        Frustum size = frustum_cm * stage_io.units_per_cm. offscreen true -> rendering.OffscreenRenderer
 #        (EGL on Linux, no display needed); false -> hidden legacy Visualizer (Open3D falls back to EGL
 #        without a display); auto -> hidden Visualizer when has_display(), else OffscreenRenderer. A blank
-#        first frame (std < 1) switches to the other renderer once. Recording runs in a "spawn" child
-#        (run_safe) so a native renderer abort (no EGL, no macOS WindowServer) cannot kill main.py.
+#        first frame (std < 1) switches to the other renderer once. OffscreenRenderer always returns a
+#        black first image on a fresh scene, and ~2% black frames later -> each re-rendered up to
+#        WARMUP_RENDERS times (then the previous frame is repeated). Orbit centre/radius = 2nd-98th
+#        percentile box of the cloud/mesh (not the median: pulled onto the floor), near/far from the orbit
+#        distance, at most MAX_FRUSTUMS frustums, coloured mesh drawn unlit. Recording runs in a "spawn"
+#        child (run_safe) so a native renderer abort (no EGL, no macOS WindowServer) cannot kill main.py.
 #        Linux + Open3D 0.20 over SSH (DISPLAY=localhost:10.0): GLFW cannot open an X11 window; both
 #        OffscreenRenderer and the hidden Visualizer (EGL fallback) render fine.
 # >>> BEGIN IMPLEMENTATION >>>
@@ -56,6 +60,8 @@ log = logging.getLogger(__name__)
 
 TRAJECTORY_RGB = (1.0, 0.0, 0.0)
 FRUSTUM_RGB = (0.0, 0.3, 1.0)
+MAX_FRUSTUMS = 60      # frustums drawn (evenly spaced along the trajectory): 800+ merge into an opaque band
+WARMUP_RENDERS = 5     # OffscreenRenderer re-renders of a black image (first of a fresh scene, ~2% of the rest)
 
 def cloud_path(run_dir: Path, cloud: str) -> tuple[Path | None, bool]:
     """(path, in_model_units) of the first existing candidate for viewer.cloud."""
@@ -121,7 +127,8 @@ def camera_geometries(run_dir: Path, cams, frustum_size: float) -> list:
         traj.paint_uniform_color(TRAJECTORY_RGB)
         geoms.append(traj)
 
-    for Ri, ti in zip(R, t):
+    step = int(np.ceil(len(R) / MAX_FRUSTUMS))
+    for Ri, ti in zip(R[::step], t[::step]):
         ext = np.eye(4)
         ext[:3, :3], ext[:3, 3] = Ri, ti
         frustum = o3d.geometry.LineSet.create_camera_visualization(w, h, K, ext, frustum_size)
@@ -171,13 +178,24 @@ def look_at(eye: np.ndarray, centre: np.ndarray, up: np.ndarray) -> np.ndarray:
     return ext
 
 def scene_frame(geoms: list) -> tuple[np.ndarray, float]:
-    """(centre, robust radius) from every vertex of the geometries."""
+    """(centre, radius) of the 2nd-98th percentile box of the cloud/mesh vertices (the line sets only when
+    there is no cloud): far outliers do not move the orbit, and unlike the median the centre is not pulled
+    onto the floor / the densest wall."""
 
-    pts = [np.asarray(g.points if hasattr(g, "points") else g.vertices) for g in geoms]
+    solid = [g for g in geoms if not isinstance(g, o3d.geometry.LineSet)] or geoms
+    pts = [np.asarray(g.points if hasattr(g, "points") else g.vertices) for g in solid]
     pts = np.concatenate([p for p in pts if len(p)])
     lo, hi = np.percentile(pts, [2, 98], axis=0)
 
-    return np.median(pts, axis=0), float(np.linalg.norm(hi - lo)) / 2 or 1.0
+    return (lo + hi) / 2, float(np.linalg.norm(hi - lo)) / 2 or 1.0
+
+def clip_planes(eyes: np.ndarray, centre: np.ndarray) -> tuple[float, float]:
+    """(near, far) from the orbit distance d (= orbit_radius_factor * scene radius): everything within
+    ~4 scene radii of the eye is kept, far outliers are clipped, the depth buffer keeps its precision."""
+
+    d = float(np.linalg.norm(eyes[0] - centre)) or 1.0
+
+    return 0.01 * d, 4.0 * d
 
 def render_offscreen(geoms: list, v: dict, eyes: np.ndarray, centre: np.ndarray, up: np.ndarray):
 
@@ -188,14 +206,29 @@ def render_offscreen(geoms: list, v: dict, eyes: np.ndarray, centre: np.ndarray,
         mat = o3d.visualization.rendering.MaterialRecord()
         is_lines = isinstance(g, o3d.geometry.LineSet)
         is_mesh = isinstance(g, o3d.geometry.TriangleMesh)
-        mat.shader = "unlitLine" if is_lines else "defaultLit" if is_mesh else "defaultUnlit"
+        lit = is_mesh and not g.has_vertex_colors()  # coloured mesh: unlit, true colours (lit is too dark)
+        mat.shader = "unlitLine" if is_lines else "defaultLit" if lit else "defaultUnlit"
         mat.point_size = float(v["point_size"])
         mat.line_width = 1.0
         renderer.scene.add_geometry(f"g{i}", g, mat)
 
+    near, far = clip_planes(eyes, centre)
+    cam = renderer.scene.camera
+    vertical = o3d.visualization.rendering.Camera.FovType.Vertical
+    last = None
     for eye in eyes:
         renderer.setup_camera(float(v["fov_deg"]), centre, eye, up)
-        yield cv2.cvtColor(np.asarray(renderer.render_to_image()), cv2.COLOR_RGB2BGR)
+        cam.set_projection(float(v["fov_deg"]), v["width"] / v["height"], near, far, vertical)
+        frame = np.asarray(renderer.render_to_image())
+        for _ in range(WARMUP_RENDERS):  # first image of a fresh scene, and ~2% of later ones, are black
+            if float(frame.std()) >= 1.0:
+                break
+            frame = np.asarray(renderer.render_to_image())
+        if float(frame.std()) >= 1.0:
+            last = frame
+        elif last is not None:  # still black after the retries: repeat the previous frame
+            frame = last
+        yield cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
 def render_hidden(geoms: list, v: dict, eyes: np.ndarray, centre: np.ndarray, up: np.ndarray):
 
@@ -212,6 +245,9 @@ def render_hidden(geoms: list, v: dict, eyes: np.ndarray, centre: np.ndarray, up
     opt.point_size = float(v["point_size"])
     opt.background_color = np.asarray(v["background"], dtype=float)
     ctr = vis.get_view_control()
+    near, far = clip_planes(eyes, centre)
+    ctr.set_constant_z_near(near)
+    ctr.set_constant_z_far(far)
     f = (h / 2) / np.tan(np.radians(v["fov_deg"]) / 2)
     params = ctr.convert_to_pinhole_camera_parameters()
     params.intrinsic = o3d.camera.PinholeCameraIntrinsic(w, h, f, f, w / 2 - 0.5, h / 2 - 0.5)
@@ -412,6 +448,11 @@ if __name__ == "__main__":
         assert np.allclose(ext[:3, :3], np.eye(3)) and np.allclose(ext[:3, 3], [0, 0, 5])
         assert first_frame(iter([np.zeros((4, 4, 3), np.uint8)])) is None and first_frame(iter([])) is None
         assert first_frame(iter([rng.integers(0, 255, (4, 4, 3)).astype(np.uint8)])) is not None
+        far = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.vstack([pts, [[1e5, 1e5, 1e5]]])))
+        c0, r0 = scene_frame([far, *camera_geometries(rd, cams, 1e4)])  # one far outlier, huge frustums
+        assert np.abs(c0).max() < 20 and r0 < 200, (c0, r0)
+        many = (cams[0], np.repeat(cams[1], 40, 0), np.repeat(cams[2], 40, 0), np.repeat(cams[3], 40, 0))
+        assert MAX_FRUSTUMS // 2 < len(camera_geometries(rd, many, 1.0)) - 1 <= MAX_FRUSTUMS  # capped frustums
 
         for offscreen in (False, True):  # hidden window first: after an OffscreenRenderer it may fail
             cfg = {"viewer": {**base, "offscreen": offscreen}, "scale": {"provisional_extent_cm": 500},
@@ -420,10 +461,12 @@ if __name__ == "__main__":
             assert out == rd / "videos/navigation_sparse_2s.mp4" and out.exists()
             cap = cv2.VideoCapture(str(out))
             n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            ok, frame = cap.read()
+            frames = [f for ok, f in iter(cap.read, (False, None)) if ok]
             cap.release()
+            frame = frames[0]
             print(f"offscreen={offscreen}: {n} frames, shape {frame.shape}, mean {frame.mean():.1f}")
-            assert ok and n == 20 and frame.shape == (240, 320, 3) and frame.std() > 1
+            assert n == len(frames) == 20 and frame.shape == (240, 320, 3)
+            assert min(float(f.std()) for f in frames) > 1  # no black frame anywhere in the orbit
         cfg = {"viewer": {**base, "offscreen": "auto"}, "scale": {"provisional_extent_cm": 500}, "run": {"log_level": "INFO"}}
         out = run_safe(cfg, tmp)  # spawn child, as main.py calls it
         assert out == rd / "videos/navigation_sparse_2s.mp4" and out.exists()
