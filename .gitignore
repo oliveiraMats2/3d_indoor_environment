@@ -23,4 +23,5 @@ colmap_*/
 frames/
 artifacts/
 results/
-/3d_image_video/                # workspace of the default dataset 3d_image_video.MOV
+# workspace of the default dataset 3d_image_video.MOV
+/3d_image_video/
