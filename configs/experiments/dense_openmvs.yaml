@@ -183,8 +183,9 @@ dense:                        # src/dense (patch_match.py, openmvs.py)
   methods: [openmvs]               # axis of this copy
   max_image_size: 1600        # longest side (px); VRAM and time grow ~side^2; 640 = quick test
   gpu_index: "0"              # "-1" = all GPUs
+  ref_step: 3                 # 1 of every N registered frames is an MVS reference; the rest stay source views (~N x faster)
   patch_match:
-    num_iterations: 5
+    num_iterations: 3         # COLMAP usually converges in 3 (default 5); time is linear
     window_radius: 5          # NCC window (2r+1)^2
     num_samples: 15           # Monte Carlo source-view samples per pixel
     num_src_images: 20        # source images per reference

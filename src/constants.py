@@ -129,7 +129,7 @@ class OpenMVS(Strict): bin_dir: Optional[str] = None; resolution_level: int = 1;
 class Dense(Strict):
     enabled: bool = False; rerun: bool = False
     methods: list[Literal["patch_match", "openmvs"]] = ["patch_match", "openmvs"]
-    max_image_size: int = 1600; gpu_index: str = "0"
+    max_image_size: int = 1600; gpu_index: str = "0"; ref_step: int = 1
     patch_match: DensePatchMatch = DensePatchMatch(); fusion: DenseFusion = DenseFusion(); openmvs: OpenMVS = OpenMVS()
 
 class DenseCompare(Strict): enabled: bool = True
