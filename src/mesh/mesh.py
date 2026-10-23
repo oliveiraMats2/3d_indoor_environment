@@ -21,13 +21,13 @@
 # Goal: export ONE chosen mesh to every format and a web/MeshLab scene with the camera path and frustums.
 #       Poisson itself runs in src/mesh/poisson.py, hole closing in src/mesh/close_holes.py.
 # In:  mesh.input close_holes -> mesh/close_holes/pre_pre/mesh.ply (falls back to mesh/poisson/pre, WARNING);
-#      poisson -> mesh/poisson/pre/mesh.ply. Scene: clean/<source>/{points,colors}.npy (source as in
+#      liepa -> mesh/liepa/mesh.ply (same fallback); poisson -> mesh/poisson/pre/mesh.ply. Scene: clean/<source>/{points,colors}.npy (source as in
 #      poisson.pick_source), scale/centers_cm.npy, sfm/{cam_R,K,image_names}.npy, one frame of
 #      cfg["extraction"]["output_dir"] (image size; falls back to 2*cx, 2*cy).
 # Out: exports/meshlab/mesh.{ply,obj,stl,off}, exports/meshlab/scene.obj, exports/web/{mesh,scene}.glb,
 #      mesh/{vertices,faces,colors}.npy; artifacts_dir/mesh.csv (source, input, n_vertices, n_faces,
 #      poisson_depth, t_s).
-# YAML: mesh: {enabled, input: close_holes|poisson, frustum_cm, frustum_every, trajectory_cm};
+# YAML: mesh: {enabled, input: close_holes|liepa|poisson, frustum_cm, frustum_every, trajectory_cm};
 #       poisson.{source, depth} (source of the scene cloud, depth logged in the CSV).
 # Rules: *_cm sizes -> working units via stage_io.units_per_cm. Every written file is reloaded (trimesh for
 #        GLB, Open3D for OBJ/STL/OFF) as a check.
@@ -51,14 +51,16 @@ FRUSTUM_RGBA = np.array([230, 60, 40, 255], dtype=np.uint8)
 TRAJECTORY_RGBA = np.array([40, 120, 230, 255], dtype=np.uint8)
 
 def pick_input(cfg: dict, run_dir: Path) -> Path | None:
-    """mesh.input close_holes -> close_holes/pre_pre (else poisson/pre, WARNING); poisson -> poisson/pre."""
+    """mesh.input close_holes -> close_holes/pre_pre, liepa -> liepa (else poisson/pre, WARNING);
+    poisson -> poisson/pre."""
 
     pre = run_dir / "mesh" / "poisson" / "pre" / "mesh.ply"
-    if cfg["mesh"]["input"] == "close_holes":
-        path = run_dir / "mesh" / "close_holes" / "pre_pre" / "mesh.ply"
+    chosen = {"close_holes": ("close_holes", "pre_pre"), "liepa": ("liepa",)}.get(cfg["mesh"]["input"])
+    if chosen:
+        path = run_dir.joinpath("mesh", *chosen, "mesh.ply")
         if path.exists():
             return path
-        log.warning("mesh.input=close_holes but %s missing: falling back to %s", path, pre)
+        log.warning("mesh.input=%s but %s missing: falling back to %s", cfg["mesh"]["input"], path, pre)
 
     return pre if pre.exists() else None
 

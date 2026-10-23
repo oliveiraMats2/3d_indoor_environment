@@ -5,15 +5,15 @@ resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and sys_platform == 'emscripten'",
     "(python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "(python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "(python_full_version < '3.11' and platform_machine == 'arm64') or (python_full_version < '3.11' and sys_platform != 'darwin')",
-    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
-    "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
-    "python_full_version >= '3.12' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
+    "(python_full_version < '3.11' and platform_machine == 'arm64') or (python_full_version < '3.11' and sys_platform != 'darwin')",
+    "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version < '3.11' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
 ]
 conflicts = [[
@@ -44,6 +44,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "pymeshlab", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin' or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'linux' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'win32' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
     { name = "pyyaml" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
     { name = "tqdm" },
     { name = "trimesh" },
 ]
@@ -77,6 +80,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pymeshlab", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin'", specifier = ">=2023.12" },
     { name = "pyyaml", specifier = ">=6" },
+    { name = "scipy", specifier = ">=1.15.3" },
     { name = "tqdm", specifier = ">=4.66" },
     { name = "trimesh", specifier = ">=4,<6" },
 ]
@@ -393,10 +397,10 @@ wheels = [
 
 [package.optional-dependencies]
 cudart = [
-    { name = "nvidia-cuda-runtime-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "(python_full_version < '3.11' and platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 curand = [
-    { name = "nvidia-curand-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "nvidia-curand-cu12", marker = "(python_full_version < '3.11' and platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 
 [[package]]
@@ -533,12 +537,12 @@ resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and sys_platform == 'emscripten'",
     "(python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "(python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
-    "python_full_version >= '3.12' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/94/36/102e180f8f5dbaee88b26595b01ca8aa80bf4e62128d9aa94265b3996c96/fonttools-4.67.0.tar.gz", hash = "sha256:3cb57e6600ca77c0b1729cf8adc23bc0652633a37f18cfa934d9c7bc3de25519", size = 3750028, upload-time = "2026-10-14T13:20:28.294Z" }
@@ -956,12 +960,12 @@ resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and sys_platform == 'emscripten'",
     "(python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "(python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
-    "python_full_version >= '3.12' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
 ]
 dependencies = [
@@ -1386,12 +1390,12 @@ resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and sys_platform == 'emscripten'",
     "(python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "(python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
-    "python_full_version >= '3.12' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
 ]
 dependencies = [
@@ -1495,12 +1499,12 @@ resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and sys_platform == 'emscripten'",
     "(python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "(python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
-    "python_full_version >= '3.12' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ce/a4/9cc30690a394a8305e8be4c9036aa16d0dfddadd09079860b582f562496d/pillow-13.0.0.tar.gz", hash = "sha256:cdcd1ba258178f7356d74170c9a81ba4eab6a5d55748bc402a5a2a6fe6be3510", size = 47058631, upload-time = "2026-10-16T22:18:09.718Z" }
@@ -1556,10 +1560,10 @@ resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and sys_platform == 'emscripten'",
     "(python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "(python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/58/e6/d0abbb256b44e6a05748c6942511ff67db8dbb068de0c35b24bf1b395b09/platformdirs-4.13.5.tar.gz", hash = "sha256:05831adf87d392760f4b5c3a0a95579ab5a10b18b9b9bd43680dcb47544788a0", size = 62362, upload-time = "2026-10-19T01:02:11.778Z" }
@@ -1641,8 +1645,8 @@ version = "4.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine == 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu') or (python_full_version < '3.11' and sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu') or (python_full_version >= '3.11' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and platform_machine == 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu') or (python_full_version != '3.11.*' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
-    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and platform_machine == 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu') or (python_full_version >= '3.12' and sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu') or (python_full_version < '3.12' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu') or (python_full_version != '3.11.*' and platform_machine == 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and extra == 'extra-21-3d-indoor-environment-cpu') or (python_full_version != '3.11.*' and sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'emscripten' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu') or (python_full_version < '3.12' and platform_machine == 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and extra == 'extra-21-3d-indoor-environment-cpu') or (python_full_version < '3.12' and sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'emscripten' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/45/64/0df767862af0df86021b9c3ab963c66359c9e3ff152c75be0c21d6c27ddf/pycolmap-4.2.1-cp310-cp310-macosx_14_0_arm64.whl", hash = "sha256:a5e55b2f1bae79c0e3cefe47d56d1efff800cb25223d38ec0ef186b6670835c3", size = 20711589, upload-time = "2026-09-29T17:04:12.055Z" },
@@ -1661,10 +1665,10 @@ name = "pycolmap-cuda12"
 version = "4.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-toolkit", extra = ["cudart", "curand"], marker = "(platform_machine == 'arm64' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "cuda-toolkit", extra = ["cudart", "curand"], marker = "(python_full_version < '3.11' and sys_platform == 'emscripten' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version < '3.11' and sys_platform == 'win32' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'emscripten' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'win32' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine == 'arm64' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version < '3.11' and sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version >= '3.11' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and platform_machine == 'arm64' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version != '3.11.*' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
-    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and platform_machine == 'arm64' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version >= '3.12' and sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version < '3.12' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version != '3.11.*' and platform_machine == 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version != '3.11.*' and sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'emscripten' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'win32' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version < '3.12' and platform_machine == 'arm64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-21-3d-indoor-environment-cuda') or (python_full_version < '3.12' and sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'emscripten' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'win32' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/38/d0/1074bdacd637926ce607c15cf7dfd9c88558e19cbc63ebdf34e685f56ea2/pycolmap_cuda12-4.2.1-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:ff62ac04e0863eb0d4efc1ded15b6420f3659f202f68d86415e344de45bede28", size = 72949941, upload-time = "2026-09-29T17:05:18.236Z" },
@@ -1773,8 +1777,8 @@ version = "2025.7.post1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
-    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and sys_platform != 'emscripten') or (python_full_version != '3.11.*' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'emscripten' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and sys_platform != 'emscripten') or (python_full_version < '3.12' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform == 'emscripten' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/73/7e/d44a74e360163ffc37f380c1be421c1594bd67e4ef9a4805691fdb662449/pymeshlab-2025.7.post1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:a5692a0a50cca49178ad9a3ceb02f60f200c7572b72f89964c7dbf915ef9e65a", size = 64994803, upload-time = "2026-01-30T08:40:19.586Z" },
@@ -2007,10 +2011,10 @@ resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and sys_platform == 'emscripten'",
     "(python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "(python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
-    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/42/68/3bd46b8a5e01d3c2ebdf9c5e9497912e3fe0cde02bac21a7130ca866e403/rpds_py-2026.9.1.tar.gz", hash = "sha256:4793ef7f78268b124b73fa933440f01d258bbae01de9fa53e9080c9ab0425a12", size = 63948, upload-time = "2026-10-04T16:32:36.469Z" }
@@ -2141,10 +2145,12 @@ name = "scipy"
 version = "1.15.3"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
+    "(python_full_version < '3.11' and platform_machine == 'arm64') or (python_full_version < '3.11' and sys_platform != 'darwin')",
     "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.11' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'x86_64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0f/37/6964b830433e654ec7485e45a00fc9a27cf868d622838f6b6d9c5ec0d532/scipy-1.15.3.tar.gz", hash = "sha256:eae3cf522bc7df64b42cad3925c876e1b0b6c35c1337c93e12c0f366f55b0eaf", size = 59419214, upload-time = "2025-05-08T16:13:05.955Z" }
 wheels = [
@@ -2182,10 +2188,14 @@ name = "scipy"
 version = "1.17.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
+    "(python_full_version == '3.11.*' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
     "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "python_full_version == '3.11.*' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version != '3.11.*' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'x86_64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -2216,10 +2226,14 @@ name = "scipy"
 version = "1.18.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
+    "python_full_version >= '3.12' and sys_platform == 'win32'",
+    "python_full_version >= '3.12' and sys_platform == 'emscripten'",
+    "(python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32')",
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.12' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (platform_machine != 'x86_64' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda') or (sys_platform != 'darwin' and extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-21-3d-indoor-environment-cpu' and extra == 'extra-21-3d-indoor-environment-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7e/74/66de6258867beb2ef08f35f9f2ac017a52cacd5081714d239ff1a442d458/scipy-1.18.1.tar.gz", hash = "sha256:52c4b7422442aba924d03ad4019852b08a92e64ea187b933135687bfe2747307", size = 30781235, upload-time = "2026-08-21T23:28:50.599Z" }
 wheels = [

@@ -2,6 +2,10 @@ __pycache__/
 .vscode/
 .venv/
 *.egg-info/
+.pytest_cache/
+
+# analyze_frames.py default output (--output quality_report)
+/quality_report/
 
 # workspaces: video_<name>.MOV and its outputs video_<name>/{frames,results,artifacts}
 /video_*
@@ -25,3 +29,15 @@ artifacts/
 results/
 # workspace of the default dataset 3d_image_video.MOV
 /3d_image_video/
+
+# workspace of cantina_institute_of_computer.mov
+/cantina_institute_of_computer/
+
+# workspace of corner_wall.mov (Etapa 3 parte 2 run from main)
+/corner_wall/
+
+# workspace of parede_sala.mov
+/parede_sala/
+
+# run logs
+*.log

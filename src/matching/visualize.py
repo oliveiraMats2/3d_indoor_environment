@@ -54,7 +54,8 @@
 # Inputs / outputs:
 #   In: the two frames, keypoints.npy of each and matches_lowe.npy from matching,
 #   plus inlier_mask.npy from epipolar/<detector>/<frameA>__<frameB>/.
-#   Out: one figure per registered pair under results/<run_id>/figures/matching/.
+#   Out: with visualize.matches.enabled, one figure for each of `samples` registered pairs per
+#   detector (evenly spread over the sequence) under results/<run_id>/figures/matching/.
 #
 # Defaults (read from the YAML block visualize.matches, never hardcoded):
 #   max_lines: 100
@@ -79,6 +80,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import cv2
@@ -204,24 +206,32 @@ def _load_image(frames_dir: Path, frame: str) -> np.ndarray:
     raise FileNotFoundError(f"frame image not found: {frame}")
 
 
+def _sample(items: list, count: int) -> list:
+    """count items evenly spread over the sequence (first and last included); all when count >= len."""
+
+    if count >= len(items):
+        return items
+
+    return [items[i] for i in np.linspace(0, len(items) - 1, count).round().astype(int)]
+
 def run(cfg: dict, run_dir: str, frames_dir: str, seed: int) -> list[Path]:
-    """Save one matching figure for every pair with a valid RANSAC pose."""
+    """Save matching figures for cfg["samples"] registered pairs per detector, spread over the sequence."""
 
     root = Path(run_dir)
     matching_root = root / "matching"
     outputs = []
     pair_number = 0
     for detector_dir in sorted(path for path in matching_root.iterdir() if path.is_dir()):
+        registered = []
         for pair_dir in sorted(path for path in detector_dir.iterdir() if path.is_dir()):
-            geometry_dir = root / "epipolar" / detector_dir.name / pair_dir.name
-            mask_path = geometry_dir / "inlier_mask.npy"
-            if not mask_path.exists():
-                continue
+            mask_path = root / "epipolar" / detector_dir.name / pair_dir.name / "inlier_mask.npy"
+            if mask_path.exists() and int(np.load(mask_path).reshape(-1).astype(bool).sum()) >= 8:
+                registered.append(pair_dir)
 
-            mask = np.load(mask_path).reshape(-1).astype(bool)
-            if int(mask.sum()) < 8:
-                continue
-
+        figures_dir = root / "figures" / "matching" / detector_dir.name
+        shutil.rmtree(figures_dir, ignore_errors=True)  # only this run's samples stay
+        for pair_dir in _sample(registered, cfg["samples"]):
+            mask_path = root / "epipolar" / detector_dir.name / pair_dir.name / "inlier_mask.npy"
             first, second = pair_dir.name.split("__", maxsplit=1)
             detection = root / "detection" / detector_dir.name
             figure = draw_pair(
@@ -235,7 +245,7 @@ def run(cfg: dict, run_dir: str, frames_dir: str, seed: int) -> list[Path]:
                 seed + pair_number,
             )
             extension = cfg["format"]
-            output = root / "figures" / "matching" / detector_dir.name / f"{pair_dir.name}.{extension}"
+            output = figures_dir / f"{pair_dir.name}.{extension}"
             output.parent.mkdir(parents=True, exist_ok=True)
             if not cv2.imwrite(str(output), figure):
                 raise OSError(f"could not save matching figure: {output}")

@@ -74,7 +74,7 @@ class Matching(Strict):
 class Ransac(Strict): method: str = "USAC_MAGSAC"; threshold_px: float = 1.0; confidence: float = 0.999; max_iters: int = 5000
 class Intrinsics(Strict): fx: Optional[float] = None; fy: Optional[float] = None; cx: Optional[float] = None; cy: Optional[float] = None
 class Geometry(Strict): enabled: bool = False; ransac: Ransac = Ransac(); intrinsics: Intrinsics = Intrinsics()
-class MatchesViz(Strict): max_lines: int = 100; dpi: int = 150; format: str = "png"
+class MatchesViz(Strict): enabled: bool = False; samples: int = 5; max_lines: int = 100; dpi: int = 150; format: str = "png"
 class EpilinesViz(Strict): n_lines: int = 20; dpi: int = 150
 class Visualize(Strict): matches: MatchesViz = MatchesViz(); epilines: EpilinesViz = EpilinesViz()
 class Measure(Strict): name: Literal["room_width", "room_length", "ceiling_height"]; value_cm: float
@@ -134,6 +134,15 @@ class Dense(Strict):
 
 class DenseCompare(Strict): enabled: bool = True
 
+class GaussianSplatting(Strict):
+    enabled: bool = False; rerun: bool = False
+    repo_dir: str = "~/gaussian-splatting"; python: str = "~/gaussian-splatting/.venv/bin/python"  # Inria clone and its venv
+    iterations: int = 30000; eval: bool = True  # eval = hold out every 8th image (llffhold) for PSNR/SSIM/LPIPS
+    resolution: int = -1  # Inria -r: -1 = auto (at most 1600 px wide), 1|2|4|8 = downscale factor, else target width
+    max_image_size: int = 1600  # image_undistorter --max_image_size
+    data_device: Literal["cpu", "cuda"] = "cpu"  # cpu: thousands of frames do not fit in 16 GB VRAM
+    sh_degree: int = 3; gpu_index: str = "0"; timeout_s: Optional[float] = None  # None = no timeout per command
+
 class Poisson(Strict):
     enabled: bool = True; source: Literal["dense", "sparse"] = "dense"
     variants: list[Literal["pre", "raw"]] = ["pre", "raw"]; depth: int = 10; density_quantile: float = 0.05
@@ -143,8 +152,12 @@ class CloseHoles(Strict):
     enabled: bool = True; variants: list[Literal["pre", "raw"]] = ["pre", "raw"]; max_hole_size: int = 30
     min_component_frac: float = 0.01; self_intersection: bool = True
 
+class Liepa(Strict):
+    enabled: bool = False; input: Literal["poisson", "close_holes"] = "poisson"; max_hole_edges: int = 200
+    density: float = 2 ** 0.5; fairing: Literal[0, 1, 2] = 2; max_refine_iters: int = 30
+
 class Mesh(Strict):
-    enabled: bool = True; input: Literal["close_holes", "poisson"] = "close_holes"
+    enabled: bool = True; input: Literal["close_holes", "poisson", "liepa"] = "close_holes"
     frustum_cm: float = 20; frustum_every: int = 5; trajectory_cm: float = 1.0
 
 class Export(Strict):
@@ -167,6 +180,7 @@ class Config(Strict):
     matching: Matching = Matching(); geometry: Geometry = Geometry(); visualize: Visualize = Visualize()
     evaluation: Evaluation = Evaluation(); sfm: Sfm = Sfm(); scale: Scale = Scale(); cleanup: Cleanup = Cleanup()
     planes: Planes = Planes(); floorplan: Floorplan = Floorplan(); dense: Dense = Dense()
-    dense_compare: DenseCompare = DenseCompare(); poisson: Poisson = Poisson(); close_holes: CloseHoles = CloseHoles()
-    mesh: Mesh = Mesh(); export: Export = Export()
+    dense_compare: DenseCompare = DenseCompare(); gaussian_splatting: GaussianSplatting = GaussianSplatting()
+    poisson: Poisson = Poisson(); close_holes: CloseHoles = CloseHoles()
+    liepa: Liepa = Liepa(); mesh: Mesh = Mesh(); export: Export = Export()
     viewer: Viewer = Viewer(); videos: Videos = Videos()

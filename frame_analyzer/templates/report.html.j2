@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --surface: #f6f8fa;
+  --accent: #0b6e4f; --accent-soft: #e3f4ec; --warn: #b35900; --warn-soft: #fff1e0;
+  --code-bg: #eff2f5; --row-alt: #fafbfc;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216; --fg: #e6e9ed; --muted: #9aa4af; --border: #2e353d; --surface: #161b21;
+    --accent: #4cc38a; --accent-soft: #12271e; --warn: #f0a050; --warn-soft: #2b1d0e;
+    --code-bg: #1c2229; --row-alt: #13171c;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.layout { max-width: 1120px; margin: 0 auto; padding: 24px 16px 64px; }
+header h1 { font-size: 1.7rem; margin: 0 0 4px; }
+header p { margin: 0; color: var(--muted); }
+h2 { font-size: 1.3rem; margin: 48px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+     scroll-margin-top: 12px; }
+h3 { font-size: 1.05rem; margin: 24px 0 8px; }
+p, li { max-width: 78ch; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 12px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap;
+      word-break: break-all; }
+a { color: var(--accent); }
+nav.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px;
+          margin: 24px 0; }
+nav.toc ol { margin: 4px 0; padding-left: 20px; columns: 2 260px; }
+nav.toc li { break-inside: avoid; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin: 16px 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.card .label { color: var(--muted); font-size: .82rem; }
+.card .value { font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.verdict { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 10px 14px;
+           border-radius: 0 6px 6px 0; }
+.verdict p { margin: 4px 0; }
+.note { border-left: 4px solid var(--warn); background: var(--warn-soft); padding: 8px 14px;
+        border-radius: 0 6px 6px 0; }
+.muted { color: var(--muted); }
+.table-wrap { overflow: auto; max-height: 560px; border: 1px solid var(--border); border-radius: 6px; margin: 10px 0 16px; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+th, td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; font-weight: 600; white-space: nowrap; }
+tbody tr:nth-child(even) { background: var(--row-alt); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+figure { margin: 16px 0; }
+figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px;
+             background: #ffffff; }
+figcaption { color: var(--muted); font-size: .85rem; margin-top: 4px; }
+dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+ul.limits li { margin-bottom: 8px; }
+@media (max-width: 600px) {
+  body { font-size: 14px; }
+  header h1 { font-size: 1.35rem; }
+  dl.kv { grid-template-columns: 1fr; }
+  dl.kv dd { margin-bottom: 6px; }
+}
+</style>
+</head>
+<body>
+{% macro table(t) -%}
+{% if t %}
+<div class="table-wrap"><table>
+<thead><tr>{% for c in t.columns %}<th{% if loop.index0 in t.numeric %} class="num"{% endif %}>{{ c }}</th>{% endfor %}</tr></thead>
+<tbody>
+{% for row in t.rows %}<tr>{% for v in row %}<td{% if loop.index0 in t.numeric %} class="num"{% endif %}>{{ v }}</td>{% endfor %}</tr>
+{% endfor %}
+</tbody></table></div>
+{% else %}
+<p class="muted">Sem dados.</p>
+{% endif %}
+{%- endmacro %}
+{% macro figs(section) -%}
+{% for f in figures.get(section, []) %}
+<figure><img src="{{ f.uri }}" alt="{{ f.caption }}" loading="lazy"><figcaption>{{ f.caption }} <span class="mono">({{ f.name }})</span></figcaption></figure>
+{% endfor %}
+{%- endmacro %}
+<div class="layout">
+<header>
+<h1>{{ title }}</h1>
+<p>Diagnóstico 2D antes da reconstrução 3D. Nenhuma reconstrução foi executada.
+Entrada: <code>{{ input_dir }}</code>{% if summary.get('finished_at') %} · concluído em {{ summary.get('finished_at') }}{% endif %}{% if summary.get('version') %} · versão {{ summary.get('version') }}{% endif %}.</p>
+</header>
+
+<nav class="toc" aria-label="Sumário"><strong>Sumário</strong>
+<ol>
+{% for id, name in sections %}<li><a href="#{{ id }}">{{ name }}</a></li>
+{% endfor %}
+{% for id, name in appendix %}<li><a href="#{{ id }}">{{ name }}</a></li>
+{% endfor %}
+</ol>
+</nav>
+
+<section id="resumo">
+<h2>{{ sections[0][1] }}</h2>
+<div class="cards">
+{% for k in key_numbers %}<div class="card"><div class="label">{{ k.label }}</div><div class="value">{{ k.value }}</div></div>
+{% endfor %}
+</div>
+<div class="verdict">
+{% for line in verdict %}<p>{{ line }}</p>
+{% endfor %}
+</div>
+</section>
+
+<section id="frames">
+<h2>{{ sections[1][1] }}</h2>
+<dl class="kv">
+<dt>Pasta de entrada</dt><dd><code>{{ input_dir }}</code></dd>
+<dt>Arquivos listados</dt><dd>{{ fmt(n_files) }}</dd>
+<dt>Legíveis</dt><dd>{{ fmt(n_readable) }}</dd>
+<dt>Ilegíveis</dt><dd>{{ fmt(n_unreadable) }}</dd>
+<dt>Stride / limite</dt><dd>{{ fmt(stride) }} / {{ fmt(limit) if limit is not none else "sem limite" }}</dd>
+<dt>Lado máximo de análise</dt><dd>{{ fmt(analysis_max_side) }} px{% if analysis_max_side == 0 %} (resolução original){% endif %}</dd>
+<dt>Grade de ocupação</dt><dd>{{ grid }}</dd>
+<dt>Bons / revisar / ruins</dt><dd>{{ fmt(quality_counts.get('good')) }} / {{ fmt(quality_counts.get('review')) }} / {{ fmt(quality_counts.get('poor')) }}</dd>
+</dl>
+<p>Os índices usados em todo o relatório são posições na lista analisada (ordenação natural dos nomes, após limite e stride), não números de frame do vídeo.</p>
+<h3>Flags atribuídas</h3>
+{{ table(flags_table) }}
+{% if rules_table %}
+<h3>Regras de classificação</h3>
+<p>Não há escore combinado: cada flag vem de uma regra explícita, e a qualidade do frame é o pior nível entre as flags disparadas.</p>
+{{ table(rules_table) }}
+{% endif %}
+<h3>Arquivos ilegíveis</h3>
+{% if unreadable_table and unreadable_table.rows %}{{ table(unreadable_table) }}{% else %}<p class="muted">Nenhum arquivo ilegível.</p>{% endif %}
+</section>
+
+<section id="resolucao">
+<h2>{{ sections[2][1] }}</h2>
+{% set r = resolution %}
+<p>{% if r.consistent is none %}Consistência de resolução não informada.{% elif r.consistent %}Todos os frames legíveis têm a mesma resolução.{% else %}<strong>Atenção:</strong> os frames têm resoluções diferentes; métricas absolutas não são diretamente comparáveis entre eles.{% endif %}
+Largura {{ fmt(r.width_min) }}–{{ fmt(r.width_max) }} px, altura {{ fmt(r.height_min) }}–{{ fmt(r.height_max) }} px.</p>
+<h3>Resolução original</h3>
+{{ table(r.table) }}
+<h3>Resolução de análise</h3>
+<p>Todas as métricas (nitidez, SIFT, grade, correspondências) são calculadas nesta resolução.</p>
+{{ table(r.analysis) }}
+<h3>Exposição</h3>
+{{ table(exposure_table) }}
+</section>
+
+<section id="nitidez">
+<h2>{{ sections[3][1] }}</h2>
+<p>A nitidez é a variância do Laplaciano da imagem em tons de cinza na resolução de análise. Esse valor depende da resolução, da textura e do conteúdo da cena, então não existe limiar universal: a classificação usa a razão entre o valor do frame e a mediana da sequência.</p>
+<dl class="kv">
+<dt>Mediana da sequência</dt><dd>{{ fmt(sharpness_median) }}</dd>
+<dt>Limiar de revisão</dt><dd>{{ fmt(sharpness_review_rel) }} × mediana = {{ fmt(sharpness_review_abs) }}</dd>
+<dt>Limiar de rejeição</dt><dd>{{ fmt(sharpness_poor_rel) }} × mediana = {{ fmt(sharpness_poor_abs) }}</dd>
+<dt>Piso absoluto calibrado</dt><dd>{{ fmt(sharpness_abs_min) if sharpness_abs_min is not none else "não usado" }}</dd>
+</dl>
+{{ table(sharpness_table) }}
+{{ figs('nitidez') }}
+</section>
+
+<section id="sift">
+<h2>{{ sections[4][1] }}</h2>
+<p>Keypoints SIFT detectados por frame e a densidade por megapixel da resolução de análise. Muitos keypoints não significam uma boa reconstrução: texturas repetitivas geram muitos pontos com descritores ambíguos.</p>
+{{ table(sift_table) }}
+{{ figs('sift') }}
+</section>
+
+<section id="espacial">
+<h2>{{ sections[5][1] }}</h2>
+<p>A imagem é dividida em uma grade {{ grid }}; a ocupação é a fração de células com pelo menos um keypoint. Ela descreve a distribuição no plano da imagem, não a cobertura 3D do ambiente. Os heatmaps mostram apenas contagens; nenhuma foto é exibida.</p>
+{{ table(occupancy_table) }}
+{{ figs('espacial') }}
+</section>
+
+<section id="matching">
+<h2>{{ sections[6][1] }}</h2>
+<p>Cada frame <em>i</em> é comparado com <em>i + d</em> para as distâncias temporais {{ offsets_used | join(", ") if offsets_used else "—" }}. Correspondências passam pelo teste de razão de Lowe e depois pela estimação robusta da matriz fundamental; um par é verificado quando F é estimada com pelo menos 8 inliers. Razão de inliers alta com poucas correspondências não basta, por isso a aresta exige os dois limiares.</p>
+<dl class="kv">
+<dt>Pares analisados</dt><dd>{{ fmt(n_pairs) }}</dd>
+<dt>Pares verificados</dt><dd>{{ fmt(n_pairs_verified) }} ({{ frac_pct(n_pairs_verified, n_pairs) }})</dd>
+<dt>Arestas aceitas</dt><dd>{{ fmt(n_edges_accepted) }}</dd>
+<dt>Critério de aresta</dt><dd><code>{{ edge_criteria }}</code></dd>
+</dl>
+<h3>Por distância temporal</h3>
+{{ table(offset_table) }}
+<h3>Status dos pares</h3>
+{{ table(status_table) }}
+<h3>Estatísticas de inliers</h3>
+{{ table(matching_table) }}
+{% if homography_note %}<p>{{ homography_note }} A homografia é só diagnóstico: valores próximos de 1 sugerem cena dominada por um plano ou rotação pura.</p>{% endif %}
+{{ figs('matching') }}
+</section>
+
+<section id="grafo">
+<h2>{{ sections[7][1] }}</h2>
+<p>Nós são frames legíveis; arestas são apenas pares aceitos pelo critério <code>{{ edge_criteria }}</code>. Frames consecutivos não ganham aresta automaticamente. Verde = frames conectados; laranja = frames isolados.</p>
+{% if graph_link %}<p><a href="{{ graph_link }}">Abrir o grafo interativo ({{ graph_link }})</a> — arquivo separado, abre offline.</p>{% else %}<p class="muted">Grafo interativo não gerado nesta execução.</p>{% endif %}
+{{ figs('grafo') }}
+<h3>Arestas aceitas{% if n_edges_rows > 30 %} (primeiras 30 de {{ fmt(n_edges_rows) }}; lista completa em <code>connectivity_edges.csv</code>){% endif %}</h3>
+{{ table(edges_table) }}
+</section>
+
+<section id="componentes">
+<h2>{{ sections[8][1] }}</h2>
+<dl class="kv">
+<dt>Nós</dt><dd>{{ fmt(g.get('n_nodes')) }}</dd>
+<dt>Arestas</dt><dd>{{ fmt(g.get('n_edges')) }}</dd>
+<dt>Componentes</dt><dd>{{ fmt(g.get('n_components')) }}</dd>
+<dt>Maior componente</dt><dd>{{ fmt(g.get('largest_component_size')) }} frames ({{ pct(g.get('largest_component_pct')) }})</dd>
+<dt>Isolados</dt><dd>{{ fmt(g.get('n_isolated')) }}</dd>
+</dl>
+{% if isolated %}<p>Frames isolados: {{ isolated[:50] | join(", ") }}{% if isolated | length > 50 %} … (+{{ isolated | length - 50 }}){% endif %}</p>{% endif %}
+<h3>Componentes (faixa de índices)</h3>
+{{ table(component_table) }}
+<h3>Distribuição de grau</h3>
+{{ table(degree_table) }}
+{{ figs('componentes') }}
+{% if figures.get('outras') %}<h3>Outras figuras</h3>{{ figs('outras') }}{% endif %}
+</section>
+
+<section id="revisao">
+<h2>{{ sections[9][1] }}</h2>
+{% if review_table %}
+<p>{{ fmt(n_review) }} frame(s) classificados como <code>review</code> ou <code>poor</code>{% if n_review > max_rows %}; mostrando os primeiros {{ fmt(max_rows) }} (lista completa em <code>frame_quality.csv</code>){% endif %}. Ruins primeiro, depois por índice.</p>
+{{ table(review_table) }}
+{% else %}
+<p class="muted">Nenhum frame precisa de revisão segundo os limiares atuais.</p>
+{% endif %}
+<h3>Candidatos a redundância temporal</h3>
+{% if redundancy.get('enabled') is sameas false %}
+<p class="muted">Análise de redundância desativada nesta execução.</p>
+{% elif redundant_table %}
+<p>{{ fmt(n_redundant) }} par(es) consecutivos quase sem deslocamento{% if n_redundant > max_rows %}; mostrando {{ fmt(max_rows) }}{% endif %}. São sugestões: frames semelhantes podem ser redundantes, mas ainda úteis para manter a conectividade.</p>
+{{ table(redundant_table) }}
+{% else %}
+<p class="muted">Nenhum candidato a redundância.</p>
+{% endif %}
+{{ figs('revisao') }}
+</section>
+
+<section id="referencia">
+<h2>{{ sections[10][1] }}</h2>
+{% if reference_url %}
+<p>Referência visual do estilo do grafo: <a href="{{ reference_url }}">{{ reference_url }}</a>.</p>
+{% else %}
+<p>A referência visual foi mostrada na discussão original do projeto; a URL pública dela não está disponível, então nenhum link é fornecido e nada foi baixado. O grafo gerado na seção 8 reproduz o estilo dessa referência: nós e arestas verdes para frames conectados e nós laranja para frames isolados.</p>
+{% endif %}
+<p>O grafo deste relatório é calculado a partir dos dados reais desta sequência; nenhum link ou aresta foi inventado.</p>
+</section>
+
+<section id="limitacoes">
+<h2>{{ sections[11][1] }}</h2>
+<ul class="limits">
+{% for l in limitations %}<li><strong>{{ l.title }}.</strong> {{ l.text }}</li>
+{% endfor %}
+</ul>
+</section>
+
+<section id="recomendacoes">
+<h2>{{ sections[12][1] }}</h2>
+<p class="muted">Derivadas dos valores medidos nesta execução.</p>
+<ul>
+{% for r in recommendations %}<li>{{ r }}</li>
+{% endfor %}
+</ul>
+</section>
+
+<section id="execucao">
+<h2>{{ appendix[0][1] }}</h2>
+<dl class="kv">
+<dt>Início</dt><dd>{{ summary.get('started_at', '—') }}</dd>
+<dt>Fim</dt><dd>{{ summary.get('finished_at', '—') }}</dd>
+<dt>Tempo total</dt><dd>{{ fmt(summary.get('elapsed_s')) }} s</dd>
+<dt>Saída</dt><dd><code>{{ output_dir }}</code></dd>
+</dl>
+{% if command %}<h3>Comando</h3><pre>{{ command }}</pre>{% endif %}
+<h3>Tempo por etapa</h3>
+{{ table(timings_table) }}
+<h3>Avisos</h3>
+{% if warnings %}<div class="note"><ul>{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul></div>{% else %}<p class="muted">Nenhum aviso.</p>{% endif %}
+<h3>Falhas de leitura</h3>
+{% if unreadable_table and unreadable_table.rows %}{{ table(unreadable_table) }}{% else %}<p class="muted">Nenhuma falha.</p>{% endif %}
+</section>
+
+<section id="configuracao">
+<h2>{{ appendix[1][1] }}</h2>
+<h3>Limiares aplicados</h3>
+{{ table(thresholds_table) }}
+<h3>Configuração completa</h3>
+{{ table(config_table) }}
+</section>
+</div>
+</body>
+</html>

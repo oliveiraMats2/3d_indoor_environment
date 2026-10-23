@@ -1,9 +1,9 @@
 # 3D Indoor Environment
 
 3D reconstruction of an indoor environment from frames extracted from a phone video: frames -> features ->
-two-view geometry -> COLMAP SfM -> metric scale -> cleanup -> planes and floor plan -> dense MVS -> Poisson
-mesh -> hole closing -> exports (COLMAP, MeshLab, web) -> evaluation -> videos -> report. One YAML drives
-the whole run.
+two-view geometry -> COLMAP SfM -> metric scale -> cleanup -> planes and floor plan -> dense MVS (and optional
+Gaussian Splatting) -> Poisson mesh -> hole closing -> exports (COLMAP, MeshLab, web) -> evaluation -> videos ->
+report. One YAML drives the whole run.
 
 ## Setup
 
@@ -17,6 +17,7 @@ Requirements:
 | pycolmap 4.x (optional) | only without the `colmap` CLI: `uv sync --extra cuda` (NVIDIA, x86_64) or `--extra cpu` | `uv sync --extra cpu` (arm64, macOS 14+) |
 | OpenMVS (optional) | build from source (https://github.com/cdcseacave/openMVS/wiki/Building) | same; there is no brew or conda package |
 | NVIDIA GPU + driver | optional: GPU SIFT/matching and patch-match stereo | not available |
+| 3D Gaussian Splatting (optional) | Inria repo in its own uv venv, CUDA 12.8 (see [Gaussian Splatting](#gaussian-splatting-optional)) | not available (CUDA only) |
 
 Create a local Python 3.12 environment and install the dependencies with uv:
 
@@ -40,6 +41,38 @@ Linux x86_64 + NVIDIA) or `uv sync --extra cpu` (pycolmap: Linux x86_64, macOS a
 `uv pip install -r pyproject.toml` add `--extra cuda` or `--extra cpu`; with pip install only one of
 `"pycolmap-cuda12>=4.2,<5"` or `"pycolmap>=4.2,<5"` (`pip uninstall pycolmap` first when switching to cuda).
 OpenMVS is looked up on `PATH` (or `dense.openmvs.bin_dir`); missing -> WARNING, `openmvs` skipped.
+
+### Gaussian Splatting (optional)
+
+`gaussian_splatting.enabled: true` runs the Inria 3DGS code (https://github.com/graphdeco-inria/gaussian-splatting)
+as subprocesses with its OWN interpreter (`gaussian_splatting.python`), so torch and its CUDA extensions never
+enter this repo's `.venv`. Missing interpreter, repo or NVIDIA GPU -> WARNING, stage skipped. Install recipe
+(uv venv at `~/gaussian-splatting/.venv`, torch for CUDA 12.8; the submodules are compiled with
+`TORCH_CUDA_ARCH_LIST=12.0` and `CUDA_HOME` pointing to a CUDA 12.8 toolkit, because the system nvcc 12.0 cannot
+target the RTX 5080, sm_120):
+
+```bash
+# CUDA 12.8 toolkit without sudo (only nvcc + headers; Python stays in uv)
+~/.local/bin/micromamba create -y -n gs -c conda-forge cuda-version=12.8 cuda-nvcc cuda-cudart-dev cuda-cccl
+
+git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting ~/gaussian-splatting
+cd ~/gaussian-splatting
+# gcc 13 needs it: add `#include <cstdint>` after `#include <vector>` in
+# submodules/diff-gaussian-rasterization/cuda_rasterizer/rasterizer_impl.h
+uv venv --python 3.11 .venv
+uv pip install --python .venv/bin/python torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
+uv pip install --python .venv/bin/python plyfile tqdm opencv-python-headless joblib pillow numpy setuptools wheel ninja
+export TORCH_CUDA_ARCH_LIST="12.0" CUDA_HOME=$HOME/micromamba/envs/gs PATH=$HOME/micromamba/envs/gs/bin:$PATH MAX_JOBS=8
+for s in simple-knn fused-ssim diff-gaussian-rasterization; do
+  uv pip install --python .venv/bin/python --no-build-isolation ./submodules/$s
+done
+```
+
+The first `metrics.py` run downloads the LPIPS VGG weights (~530 MB) to `~/.cache/torch/hub/checkpoints/`.
+Smoke test (194 frames, 2000 iterations, RTX 5080): train 117 s, ~3.5 GB VRAM peak with `data_device: cpu`.
+
+Check: `~/gaussian-splatting/.venv/bin/python -c "import torch, diff_gaussian_rasterization, simple_knn;
+print(torch.cuda.is_available())"` prints `True`.
 
 What changes on macOS (no CUDA):
 
@@ -86,16 +119,22 @@ and `configs/experiments/` (`.yaml` may be omitted). So `python3 main.py default
     wall angles, top-view floor plan and room dimensions.
 11. **dense** (`src/dense`): COLMAP patch-match stereo and/or OpenMVS, then cleanup of each dense cloud.
 12. **dense_compare** (`src/dense/compare.py`): density, completeness and chamfer between methods.
-13. **poisson** (`src/mesh/poisson.py`): Poisson surface, variants `pre` (cleaned cloud) and `raw` (no cleanup).
-14. **close_holes** (`src/mesh/close_holes.py`): MeshLab Close Holes on every Poisson variant, with (`pre`)
+13. **gaussian_splatting** (`src/gs/gaussian_splatting.py`, optional, `gaussian_splatting.enabled`): Inria 3D
+    Gaussian Splatting on the undistorted SfM model; every 8th image is held out and the test views are scored
+    (PSNR, SSIM, LPIPS), a novel-view synthesis benchmark next to the sparse/dense reconstruction.
+14. **poisson** (`src/mesh/poisson.py`): Poisson surface, variants `pre` (cleaned cloud) and `raw` (no cleanup).
+15. **close_holes** (`src/mesh/close_holes.py`): MeshLab Close Holes on every Poisson variant, with (`pre`)
     and without (`raw`) mesh repair first.
-15. **mesh** (`src/mesh/mesh.py`): the chosen mesh in PLY/OBJ/STL/OFF/GLB plus a scene with cameras and path.
-16. **export** (`src/export/meshlab.py`): MeshLab project with every cloud and mesh as layers, filter script.
-17. **evaluation** (`src/evaluation`): reprojection error, metric error against tape measures, loop drift,
+16. **liepa** (`src/mesh/liepa.py`, optional, `liepa.enabled`): Liepa (2003) hole filling — minimum-weight
+    triangulation (dihedral angle, area), density refinement and thin-plate fairing of each hole up to
+    `max_hole_edges`; writes `exports/meshlab/liepa_scene.ply`. Smooth patches ("bubble" on big holes).
+17. **mesh** (`src/mesh/mesh.py`): the chosen mesh in PLY/OBJ/STL/OFF/GLB plus a scene with cameras and path.
+18. **export** (`src/export/meshlab.py`): MeshLab project with every cloud and mesh as layers, filter script.
+19. **evaluation** (`src/evaluation`): reprojection error, metric error against tape measures, loop drift,
     smooth vs textured walls, ablation table across runs.
-18. **viewer** (`src/viewer.py`): orbit video of the chosen cloud, recorded in a child process.
-19. **videos** (`src/videos.py`): top-view trajectory, kept vs discarded frames, `videos.csv`.
-20. **report** (`src/relatorio.py`): `report.md` built only from the saved files.
+20. **viewer** (`src/viewer.py`): orbit video of the chosen cloud, recorded in a child process.
+21. **videos** (`src/videos.py`): top-view trajectory, kept vs discarded frames, `videos.csv`.
+22. **report** (`src/relatorio.py`): `report.md` built only from the saved files.
 
 ## Adding a new video
 
@@ -123,16 +162,20 @@ video_<name>/
                            discarded/{blur,motion}/ (shared by every config with the same tag)
   results/<id>/            run.log, config.resolved.yaml, K.npy
     detection/ matching/ epipolar/ figures/       2D stages, epipolar lines, floorplan.png
-    sfm/ scale/ clean/<source>/ planes/ floorplan/ dense/<method>/ mesh/{poisson,close_holes}/ evaluation/
+    sfm/ scale/ clean/<source>/ planes/ floorplan/ dense/<method>/ mesh/{poisson,close_holes,liepa}/ evaluation/
+    gaussian_splatting/    data/{images,sparse/0} (undistorted), model/ (Inria: point_cloud/iteration_<N>/,
+                           test/ours_<N>/{renders,gt}, results.json, per_view.json), gs.log
     exports/
       colmap/              COLMAP workspace: images/, database.db, sparse/0/, sparse.ply, project.ini, colmap.log
       meshlab/             project.mlp, process.mlx, sparse.ply, fused_<method>.ply, cloud_clean_<source>.ply,
-                           poisson_<v>.ply, close_holes_<pv>_<cv>.ply, mesh.{ply,obj,stl,off}, scene.obj
+                           poisson_<v>.ply, close_holes_<pv>_<cv>.ply, liepa_scene.ply,
+                           mesh.{ply,obj,stl,off}, scene.obj
       web/                 scene.glb, mesh.glb
+      gaussian_splatting/  point_cloud.ply (trained Gaussians)
     videos/                navigation_<cloud>_<s>s.mp4, trajectory_topdown.mp4, frames_kept_vs_discarded.mp4
   artifacts/<id>/          one CSV per stage (extraction_metrics, frame_quality_metrics, sfm_metrics, scale,
-                           cleanup, planes, floorplan, dense_metrics, poisson, close_holes, mesh, evaluation,
-                           videos, ablation, ...) and report.md
+                           cleanup, planes, floorplan, dense_metrics, gaussian_splatting, poisson, close_holes,
+                           liepa, mesh, evaluation, videos, ablation, ...) and report.md
 ```
 
 - `extraction.rerun: false` reuses the frames of `<tag>` when `selecao.csv` exists; `true` extracts again.
@@ -149,6 +192,10 @@ video_<name>/
   MeshLab processing on a cloud: `Filters > Show current filter script > Load Script` -> `process.mlx`.
 - **Web / viewers**: `exports/web/scene.glb` (cloud, camera frustums and trajectory) and `mesh.glb`; any glTF
   viewer (browser glTF viewers, Blender, three.js).
+- **Gaussian Splatting**: `exports/gaussian_splatting/point_cloud.ply` in SuperSplat (https://superspl.at/editor,
+  drag and drop) or SIBR (`SIBR_gaussianViewer_app -m <ws>/results/<id>/gaussian_splatting/model`). The scores are
+  in `artifacts/<id>/gaussian_splatting.csv` (one row per run id): `n_images, n_train, n_test, iterations,
+  resolution, max_image_size, n_gaussians, psnr, ssim, lpips, t_undistort_s, t_train_s, t_render_s, t_metrics_s, t_s`.
 
 | | OBJ (`exports/meshlab/*.obj`) | GLB (`exports/web/*.glb`) |
 |---|---|---|
@@ -199,6 +246,7 @@ the effect (compare its reprojection and dense metrics with `default` in the abl
 | COLMAP patch-match stereo | always CUDA (else skipped) | `dense.gpu_index`, `dense.max_image_size` |
 | Open3D cleanup | Open3D CUDA build | `cleanup.device: auto\|CPU:0\|CUDA:0` |
 | viewer orbit rendering | OpenGL / EGL | `viewer.offscreen` |
+| Gaussian Splatting train/render/metrics | always CUDA (else skipped) | `gaussian_splatting.gpu_index`, `gaussian_splatting.data_device` |
 
 Poisson (`poisson.threads`), Close Holes and OpenMVS (`dense.openmvs.max_threads`) run on the CPU.
 
@@ -382,6 +430,19 @@ Generated from `src/constants.py` and the comments of `configs/default.yaml`; bl
 | `dense.openmvs.max_threads` | `0` | 0 = all cores |
 | **`dense_compare`** | | src/dense/compare.py |
 | `dense_compare.enabled` | `true` | density, completeness and chamfer between dense methods |
+| **`gaussian_splatting`** | | src/gs/gaussian_splatting.py (Inria 3DGS, novel-view synthesis benchmark; optional, CUDA only) |
+| `gaussian_splatting.enabled` | `false` | true -> exports/gaussian_splatting/point_cloud.ply + PSNR/SSIM/LPIPS; missing tool/GPU -> WARNING, skipped |
+| `gaussian_splatting.rerun` | `false` | false: reuse gaussian_splatting/data and model/point_cloud/iteration_<iterations> |
+| `gaussian_splatting.repo_dir` | `~/gaussian-splatting` | clone of graphdeco-inria/gaussian-splatting (train.py, render.py, metrics.py) |
+| `gaussian_splatting.python` | `~/gaussian-splatting/.venv/bin/python` | interpreter with torch + the built submodules |
+| `gaussian_splatting.iterations` | `30000` | training iterations (Inria default; 7000 = quick test) |
+| `gaussian_splatting.eval` | `true` | hold out every 8th image (llffhold) as test views for PSNR/SSIM/LPIPS |
+| `gaussian_splatting.resolution` | `-1` | Inria -r: -1 = auto (at most 1600 px wide) \| 1, 2, 4, 8 = downscale factor \| else target width |
+| `gaussian_splatting.max_image_size` | `1600` | image_undistorter --max_image_size (longest side of the training images) |
+| `gaussian_splatting.data_device` | `cpu` | cpu \| cuda; cpu: thousands of frames do not fit in 16 GB VRAM |
+| `gaussian_splatting.sh_degree` | `3` | spherical harmonics degree of the Gaussian colours |
+| `gaussian_splatting.gpu_index` | `'0'` | CUDA_VISIBLE_DEVICES of train/render/metrics |
+| `gaussian_splatting.timeout_s` | `null` | null = no limit; else kill each command after this many seconds |
 | **`poisson`** | | src/mesh/poisson.py (Open3D) |
 | `poisson.enabled` | `true` | Poisson surface reconstruction |
 | `poisson.source` | `dense` | dense -> first dense.methods with output, else sparse (WARNING) \| sparse |
@@ -396,9 +457,16 @@ Generated from `src/constants.py` and the comments of `configs/default.yaml`; bl
 | `close_holes.max_hole_size` | `30` | max hole size in boundary edges (MeshLab maxholesize) |
 | `close_holes.min_component_frac` | `0.01` | pre: remove isolated pieces smaller than this fraction of the bbox diagonal |
 | `close_holes.self_intersection` | `true` | forbid patches that self-intersect (MeshLab selfintersection) |
+| **`liepa`** | | src/mesh/liepa.py (Liepa 2003 hole filling: triangulate + refine + fair; optional) |
+| `liepa.enabled` | `false` | true -> exports/meshlab/liepa_scene.ply (+ mesh/liepa/); false -> stage skipped |
+| `liepa.input` | `poisson` | poisson (pre) \| close_holes (pre_pre): mesh whose holes are filled |
+| `liepa.max_hole_edges` | `200` | holes with more boundary edges are left open (keeps the scene border open) |
+| `liepa.density` | `1.414...` | refinement alpha (Liepa sqrt(2)); higher = denser patch |
+| `liepa.fairing` | `2` | 2 = thin plate (bi-Laplacian, paper) \| 1 = membrane (Laplacian) \| 0 = flat, no fairing |
+| `liepa.max_refine_iters` | `30` | cap on the split/relax rounds per hole |
 | **`mesh`** | | src/mesh/mesh.py (formats + scene of ONE chosen mesh) |
 | `mesh.enabled` | `true` | export the chosen mesh and the scene (cameras + trajectory) |
-| `mesh.input` | `close_holes` | close_holes (pre_pre) \| poisson (pre): mesh exported to PLY/OBJ/STL/OFF/GLB |
+| `mesh.input` | `close_holes` | close_holes (pre_pre) \| poisson (pre) \| liepa: mesh exported to PLY/OBJ/STL/OFF/GLB |
 | `mesh.frustum_cm` | `20` | camera pyramid depth |
 | `mesh.frustum_every` | `5` | draw 1 camera every N |
 | `mesh.trajectory_cm` | `1.0` | trajectory tube diameter |
@@ -478,3 +546,45 @@ AKAZE gives the most inliers per pair, the best spatial coverage and a compact b
 descriptor (61 B vs 512 B for SIFT). Its slower detection does not matter offline,
 because reconstruction quality depends on inliers and coverage. ORB is the choice
 when time is the constraint. Confirm with `summary.csv` on the full frame set.
+
+## Frame quality analyzer (`analyze_frames.py`)
+
+Standalone diagnosis of a folder of already extracted frames, run before spending hours on SfM/MVS. It does not
+run COLMAP, does not reconstruct anything and does not re-extract frames; it only reads the images, measures
+them and checks two-view geometry between temporally close pairs. Code in `frame_analyzer/` (independent of
+`src/`), OpenCV SIFT required (`opencv-contrib-python`; missing SIFT -> clear error, no fallback detector).
+
+```bash
+python3 analyze_frames.py --input video_image/frames/<tag> --output quality_report
+python3 analyze_frames.py --input <frames> --output <out> --stride 2 --offsets 1,2,5 --grid 8x8
+python3 analyze_frames.py --help        # every threshold, with its default
+```
+
+Per frame, at the analysis resolution (`--analysis-max-side`, default 1280): Laplacian variance (sharpness,
+judged relative to the sequence median), SIFT keypoint count and density per MP, occupancy of a `ROWSxCOLS`
+grid, brightness, dark and saturated fractions. Per pair `(i, i + d)` for each `d` in `--offsets`: Lowe ratio
+test, fundamental matrix with RANSAC/MAGSAC, inliers and inlier ratio (homography as a side diagnostic only).
+A pair becomes a graph edge only when F is verified and both `--edge-min-inliers` and
+`--edge-min-inlier-ratio` hold; consecutive frames never get an edge for free. Each frame ends up `good`,
+`review` or `poor` through explicit rules listed in its `flags` column (no combined score).
+
+Outputs (`--output`, default `quality_report/`):
+
+| File | Content |
+|---|---|
+| `quality_report.html` | self-contained report (inline CSS, figures embedded, opens offline), in Portuguese: executive summary, frames, resolution, sharpness, SIFT, spatial heatmaps, matching, connectivity graph, components, frames to review, visual reference, limitations, acquisition recommendations, full config and timings |
+| `README.md` | what each file is, how to read it, and the exact command of that run |
+| `frame_quality.csv` | one row per frame: metrics, degree, component, flags, quality |
+| `pair_quality.csv` | one row per analyzed pair: matches, inliers, ratio, status, edge accepted |
+| `connectivity_edges.csv` | accepted edges and the criterion applied |
+| `redundant_pairs.csv` | consecutive pairs with almost no motion (suggestions, nothing is removed) |
+| `summary.json` | aggregated numbers, thresholds, warnings, timings, config |
+| `connectivity_graph.html` | interactive graph (green = connected, orange = isolated); skipped with `--no-interactive-graph` |
+| `grid_counts.npy` | (N, rows, cols) keypoints per grid cell for every frame |
+| `*.png` | the charts, heatmaps and static graph (`connectivity_graph.png`) embedded in the report (data only, never photos) |
+
+Reading it: several connected components mean the chain of verified pairs breaks, and the recommendations
+list the frame index ranges where it breaks; indices are positions in the analyzed list (after `--limit` and
+`--stride`), so use `filename` to find the frame. `good` means no rule fired, not that the reconstruction
+will work: Laplacian variance has no universal threshold, many keypoints can come from repetitive texture,
+and grid occupancy is coverage of the image plane, not of the room.

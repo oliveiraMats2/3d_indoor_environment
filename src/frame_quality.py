@@ -19,9 +19,7 @@
 """Per-frame quality: sharpness, exposure, contrast and texture (no relation between frames)."""
 import csv
 import logging
-import shutil
 from collections import Counter
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -125,14 +123,7 @@ def run(cfg, frame_paths, csv_path):
         row = {"frame": p, **m, "keep": not why, "reason": reason}
         rows.append(row)
 
-    write_csv(rows, csv_path)
-    if frame_paths:  # copies of the rejected frames in <frames_dir>/discarded/quality/ (reset every run)
-        quality_dir = Path(frame_paths[0]).parent / "discarded" / "quality"
-        shutil.rmtree(quality_dir, ignore_errors=True)
-        quality_dir.mkdir(parents=True, exist_ok=True)
-        for p in sorted(set(frame_paths) - set(kept)):
-            shutil.copy2(p, quality_dir / Path(p).name)
-
+    write_csv(rows, csv_path)  # rejected frames stay in <frames_dir> (no copies): keep/reason columns list them
     n_kept = len(kept)
     n_total = len(frame_paths)
     counts_dict = dict(counts)

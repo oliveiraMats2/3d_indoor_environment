@@ -34,7 +34,8 @@ from src.dense import compare as dense_compare, openmvs, patch_match
 from src.epipolar import two_view
 from src.evaluation import ablation, hard_regions, loop_drift, metric_error, reprojection
 from src.export import meshlab
-from src.mesh import close_holes, mesh, poisson
+from src.gs import gaussian_splatting
+from src.mesh import close_holes, liepa, mesh, poisson
 from src.sfm import colmap, convert, scale
 
 log = logging.getLogger("main")
@@ -138,15 +139,16 @@ def main():
 
     if cfg.matching.enabled and cfg.geometry.enabled:
         stage("matching_metrics", matching_metrics.run, run_dir, artifacts_dir)
-        matches_visualize_cfg = cfg.visualize.matches.model_dump()
-        stage(
-            "matching_visualization",
-            matching_visualize.run,
-            matches_visualize_cfg,
-            run_dir,
-            ext.output_dir,
-            run.seed,
-        )
+        if cfg.visualize.matches.enabled:  # off by default: `samples` figures per detector
+            matches_visualize_cfg = cfg.visualize.matches.model_dump()
+            stage(
+                "matching_visualization",
+                matching_visualize.run,
+                matches_visualize_cfg,
+                run_dir,
+                ext.output_dir,
+                run.seed,
+            )
 
     # ponytail: evaluation is still a stub; replace the raise once implemented
     stubs = (("evaluation", "src.evaluation"),)
@@ -183,11 +185,17 @@ def main():
     if cfg.dense_compare.enabled:
         stage("dense_compare", dense_compare.run, full_cfg, run_dir, artifacts_dir)
 
+    if cfg.gaussian_splatting.enabled:  # needs only the sfm model; GPU stages stay sequential
+        stage("gaussian_splatting", gaussian_splatting.run, full_cfg, run_dir, artifacts_dir)
+
     if cfg.poisson.enabled:
         stage("poisson", poisson.run, full_cfg, run_dir, artifacts_dir)
 
     if cfg.close_holes.enabled:
         stage("close_holes", close_holes.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.liepa.enabled:
+        stage("liepa", liepa.run, full_cfg, run_dir, artifacts_dir)
 
     if cfg.mesh.enabled:
         stage("mesh", mesh.run, full_cfg, run_dir, artifacts_dir)

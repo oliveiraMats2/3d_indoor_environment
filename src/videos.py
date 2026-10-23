@@ -34,7 +34,7 @@
 #     sampled frame. A sampled frame holds its banner until the next one.
 #     Sources: <frames_dir>/selecao.csv (imagem, frame_video, tempo_s,
 #     blur_coef, motion_ratio, kept; dropped rows have imagem "" and kept 0),
-#     <frames_dir>/discarded/{blur,motion,quality}/* (stem = video frame index
+#     <frames_dir>/discarded/{blur,motion}/* (stem = video frame index
 #     or contains img_xxxx) and artifacts/<id>/frame_quality_metrics.csv
 #     (frame, ..., keep, reason). Dropped overrides kept.
 #   - videos.csv: one row per <run_dir>/videos/*.mp4 (file, cloud, seconds,
@@ -262,7 +262,7 @@ def frame_events(cfg: dict, artifacts_dir: Path) -> dict[int, tuple[str, str]]:
             reason = "blur"
         pending[f] = reason
 
-    for sub in ("blur", "motion", "quality"):
+    for sub in ("blur", "motion"):  # quality rejects come from frame_quality_metrics.csv below
         d = frames_dir / "discarded" / sub
         for p in sorted(d.glob("*")) if d.is_dir() else []:
             f = parse_discarded(p, image_to_frame)
