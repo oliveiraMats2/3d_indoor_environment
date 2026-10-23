@@ -16,7 +16,7 @@
 # ║  ⠀⠀⠀⠈⣿⣿⣿⡆⠀⠀⠀⣿⣿⣿⡟⣼⡿⠁⢹⣿⣿⣷⠀⠀⠀⠀⠀⠀⠀⠀                                            ║
 # ╚══════════════════════════════════════════════════════════════════════════════════════╝
 
-"""Single entry point: python main.py --config configs/default.yaml"""
+"""Single entry point: python main.py (uses config.yaml; --config <file> to pick another)"""
 import argparse, glob, logging, os, random, shutil, sys, time
 from pathlib import Path
 
@@ -26,6 +26,7 @@ import yaml
 
 from src import detectores, epipolar, extrair_quadros, frame_quality, matching, relatorio
 from src.constants import Config
+from src.epipolar import two_view
 from src.matching import metrics as matching_metrics
 from src.matching import visualize as matching_visualize
 
@@ -44,7 +45,7 @@ def stage(name, fn, *args):
 def main():
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/default.yaml")
+    parser.add_argument("--config", default="config.yaml")
     args = parser.parse_args()
     path = args.config
     config_file = open(path)
@@ -116,6 +117,7 @@ def main():
     if cfg.geometry.enabled:
         geometry_cfg = cfg.geometry.model_dump()
         stage("geometry", epipolar.run, geometry_cfg, run_dir, ext.output_dir)
+        stage("two_view", two_view.run, cfg.model_dump(), run_dir, ext.output_dir, artifacts_dir)
 
     report_cfg = cfg.report.model_dump()
     stage("report", relatorio.run, report_cfg, run_dir, ext.output_dir, artifacts_dir)
