@@ -119,9 +119,6 @@ def main():
         stage("geometry", epipolar.run, geometry_cfg, run_dir, ext.output_dir)
         stage("two_view", two_view.run, cfg.model_dump(), run_dir, ext.output_dir, artifacts_dir)
 
-    report_cfg = cfg.report.model_dump()
-    stage("report", relatorio.run, report_cfg, run_dir, ext.output_dir, artifacts_dir)
-
     if cfg.matching.enabled and cfg.geometry.enabled:
         stage("matching_metrics", matching_metrics.run, run_dir, artifacts_dir)
         matches_visualize_cfg = cfg.visualize.matches.model_dump()
@@ -133,6 +130,10 @@ def main():
             ext.output_dir,
             run.seed,
         )
+
+    # report last: it rewrites matching_metrics.csv with the sampson_px column on top of the matching_metrics stage
+    report_cfg = cfg.report.model_dump()
+    stage("report", relatorio.run, report_cfg, run_dir, ext.output_dir, artifacts_dir)
 
     # ponytail: evaluation is still a stub; replace the raise once implemented
     stubs = (("evaluation", "src.evaluation"),)
