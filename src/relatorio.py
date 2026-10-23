@@ -17,7 +17,7 @@
 # ╚══════════════════════════════════════════════════════════════════════════════════════╝
 
 """SIFT x ORB x AKAZE tables and figures from the .npy files saved by detectores.py."""
-import csv, os
+import csv, logging, os
 import cv2
 import numpy as np
 from tqdm import tqdm
@@ -26,6 +26,8 @@ COLS_DET = ["n_keypoints", "time_ms_mean", "time_ms_std", "time_per_kp_ms", "cov
             "entropy_8x8", "scale_p5", "scale_p95", "descriptor_bytes"]
 COLS_MAT = ["n_matches_raw", "n_matches_lowe", "inliers", "inlier_ratio", "matching_score", "success",
             "sampson_px", "match_time_ms_mean", "match_time_ms_std"]
+
+log = logging.getLogger(__name__)
 
 load_pair_file = lambda mbase, pair, f: np.load(os.path.join(mbase, pair, f))
 
@@ -167,7 +169,8 @@ def run(cfg: dict, run_dir: str, frames_dir: str, metrics_dir: str) -> None:
                 save(out, img)
 
         mr = []
-        mbase = os.path.join(run_dir, "matching", det)
+        mbase = os.path.join(run_dir, "epipolar", det)
+        match_dir = os.path.join(run_dir, "matching", det)
         pairs = ls(mbase)
         progress = tqdm(pairs, desc=f"{det} report pairs", unit="pair")
         for pair in progress:
@@ -177,13 +180,17 @@ def run(cfg: dict, run_dir: str, frames_dir: str, metrics_dir: str) -> None:
                 continue
 
             qa, qb = pair.split("__")
-            raw = load_pair_file(mbase, pair, "matches_raw.npy")
-            lowe = load_pair_file(mbase, pair, "matches_lowe.npy")
+            raw = load_pair_file(match_dir, pair, "matches_raw.npy")
+            lowe = load_pair_file(match_dir, pair, "matches_lowe.npy")
             mask_raw = load_pair_file(mbase, pair, "inlier_mask.npy")
             mask = mask_raw.astype(bool)
             E = load_pair_file(mbase, pair, "E.npy")
-            t = load_pair_file(mbase, pair, "times_ms.npy")
-            inl = lowe[mask] if len(lowe) else lowe
+            t = load_pair_file(match_dir, pair, "times_ms.npy")
+            if len(mask) != len(lowe):
+                log.warning("%s %s: inlier_mask (%d) != matches_lowe (%d), skipped", det, pair, len(mask), len(lowe))
+                continue
+
+            inl = lowe[mask] if len(lowe) else lowe.reshape(-1, 3)
             ia_idx = inl[:, 0].astype(int)
             ib_idx = inl[:, 1].astype(int)
             p1 = pts[qa][ia_idx, :2]

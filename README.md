@@ -1,83 +1,83 @@
-# 3D Indoor Environment
+# 3D Indoor Environment: Stage 3, part 2 (epipolar geometry)
 
-3D reconstruction of an indoor environment from frames extracted from a phone video.
+Two-view geometry for every detector (SIFT, ORB, AKAZE) and every consecutive frame pair, built on the
+Lowe-filtered matches of Stage 3 part 1 (code in `src/epipolar/`):
 
-## Setup
+- **geometry** stage (`src/epipolar/__init__.py`, `estimate.py`): estimate the fundamental matrix `F` and the
+  essential matrix `E` with a robust estimator (USAC_MAGSAC by default); inliers = accepted by both.
+- **two_view** stage (`src/epipolar/two_view.py`): recover `R, t` from `E` with the cheirality check (`pose.py`),
+  draw epipolar lines on both frames (`visualize.py`) and triangulate the initial two-view 3D cloud (`triangulate.py`).
 
-Create a local Python 3.12 environment and install the dependencies with uv:
-
-```bash
-uv python install 3.12
-uv venv --python 3.12 .venv
-source .venv/bin/activate
-uv pip install -r pyproject.toml
-```
+Full write-up (method, results, discussion): [docs/etapa3_parte2.md](docs/etapa3_parte2.md).
 
 ## Run
 
+Python 3.12 virtual environment with the dependencies of `pyproject.toml`:
+
 ```bash
-python main.py --config configs/default.yaml
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install opencv-contrib-python numpy pyyaml "pydantic>=2" tqdm   # or: uv pip install -r pyproject.toml
 ```
 
-`main.py` is the only entry point. Stages, in order:
+Put the video next to `main.py` (file name = `extraction.video`, default `3d_image_video.MOV`), then:
 
-1. **extraction** (`src/extrair_quadros.py`): sharp frames with 60 to 80% overlap from the video.
-2. **frame quality** (`src/frame_quality.py`): blur, exposure, contrast and texture checks.
-3. **detection** (`src/detectores.py`): SIFT x ORB x AKAZE keypoints and descriptors as `.npy`.
-4. **matching** (`src/matching`): BF/FLANN, Lowe filtering and runtime logs for the configured frame pairs.
-5. **geometry** (`src/epipolar`): fundamental/essential matrices and RANSAC inlier masks.
-6. **report** (`src/relatorio.py`) and matching metrics/figures: artifacts built only from saved `.npy` files.
-7. **pose**, **triangulation** and **evaluation**: pending stages.
+```bash
+python main.py                       # uses config.yaml
+python main.py --config <file>.yaml  # any other config (run id = file name)
+```
 
-## Configs
+Stages, in order: extraction, frame_quality, detection, matching, geometry, two_view, report.
+`opencv-contrib-python` is required (AKAZE lives in `cv2.xfeatures2d` on OpenCV 5).
 
-- One YAML = one experiment. `configs/default.yaml` holds every key with its default;
-  each file in `configs/experiments/` is a full copy with one line changed (e.g. `lowe_070.yaml`).
-- `run.id: null` uses the YAML file name as the run id.
-- Unknown keys are rejected (pydantic `extra="forbid"`), so typos fail before anything runs.
-- `extraction.rerun: false` reuses the frames in `frames/` (when `selecao.csv` exists); `true` deletes them and extracts again.
-- `run.cache: true` reuses detection
-  (when `results/<id>/K.npy` exists). `run.overwrite: true` deletes `results/<id>/` first;
-  with both false an existing run is never touched.
+## config.yaml
+
+`config.yaml` is partial: only the stages implemented so far (extraction to two-view geometry); later stages are
+not included yet. Unknown keys are rejected (pydantic `extra="forbid"`).
+
+| Key | Meaning |
+|---|---|
+| `run` | `id` (null = config file name), output/artifact roots, `seed`, `log_level`, `overwrite` (delete `results/<id>/` first), `cache` (reuse detection) |
+| `extraction` | video and frame selection (overlap 60 to 80%, sharpness); `rerun: false` reuses `frames/` when `selecao.csv` exists |
+| `frame_quality` | blur, exposure, contrast and texture thresholds for discarding frames |
+| `detection` | `methods` (sift, orb, akaze), `nfeatures`, timing `reps`/`warmup` |
+| `filters` | `lowe_ratio`, `min_matches` (pairs below it are unsuccessful) |
+| `matching` | `name` (brute_force, flann), `strategy` (sequential, all_pairs), timing reps, FLANN index params |
+| `report` | `max_figures` for the detection/matching report |
+| `geometry.enabled` | run the geometry and two_view stages |
+| `geometry.ransac.method` | OpenCV robust method name, resolved as `cv2.<method>` (default `USAC_MAGSAC`) |
+| `geometry.ransac.threshold_px` | max distance (px) from a point to its epipolar line to count as inlier |
+| `geometry.ransac.confidence` | RANSAC confidence (0.999) |
+| `geometry.ransac.max_iters` | RANSAC iteration cap (5000) |
+| `geometry.intrinsics.{fx,fy,cx,cy}` | camera intrinsics; null fx/fy -> `max(w, h)`, null cx/cy -> `w/2, h/2` |
+| `visualize.matches` | `max_lines`, `dpi`, `format` of the match figures |
+| `visualize.epilines.n_lines` | number of inliers sampled (seeded by `run.seed`) whose epipolar lines are drawn |
+| `visualize.epilines.dpi` | figure resolution; the side-by-side canvas is 12 in wide (150 dpi -> 1800 px) |
 
 ## Outputs
 
-- `frames/`: extracted frames plus `selecao.csv`, shared by all experiments.
-- `results/<id>/`: `run.log`, `config.resolved.yaml`, `K.npy`, `detection/`, `matching/`, `figures/`.
-- `artifacts/<id>/`: `frame_quality_metrics.csv`, `detection_metrics.csv`, `matching_metrics.csv`, `summary.csv`.
+`results/<id>/epipolar/<det>/<A>__<B>/` (one folder per detector and frame pair):
 
-## Layout
+| File | Content |
+|---|---|
+| `F.npy`, `E.npy`, `K.npy` | fundamental, essential (NaN if estimation failed) and intrinsics, 3x3 |
+| `inlier_mask.npy`, `sampson_errors.npy` | inliers of both F and E over the Lowe matches; Sampson errors |
+| `R.npy`, `t.npy`, `pose_mask.npy` | rotation, unit-norm translation of camera 2 w.r.t. camera 1; inliers that pass cheirality |
+| `points3d.npy`, `colors.npy`, `cloud.ply` | triangulated points (N, 3), RGB colors from frame A, cloud for viewing (Open3D) |
 
-```
-main.py                 entry point (config validation, stage order, logging, cache)
-configs/                default.yaml, experiments/*.yaml
-src/
-  constants.py          YAML schema (pydantic, unknown keys rejected)
-  extrair_quadros.py    stage 1, helpers in extraction/
-  frame_quality.py      stage 2
-  detectores.py         stage 3
-  relatorio.py          stage 4
-  matching/             matcher, Lowe filter, metrics and figures
-  epipolar/             F/E with RANSAC; pose, epipolar lines and triangulation are pending
-  evaluation/           reprojection, metric error, loop drift, ablation (stub)
-```
+`results/<id>/figures/epilines/<det>/<A>__<B>.png`: epipolar lines of the sampled inliers drawn on both frames
+(lines from frame A on frame B and vice versa, same color per pair). `results/<id>/K.npy` keeps the K used.
 
-Requires `opencv-contrib-python` (in OpenCV 5, AKAZE lives in `cv2.xfeatures2d`).
-Keypoint figures (`figures/keypoints/<detector>/`) show scale as the circle and orientation as
-the line; `figures/registration/<detector>/` holds only pairs with >= 8 RANSAC inliers of `E`.
-Intrinsics are approximate (`f = max(w, h)`) unless `geometry.intrinsics` is set.
+`artifacts/<id>/epipolar_metrics.csv` (one row per detector and pair, rewritten every run):
 
-### Chosen detector: AKAZE
+| Column | Meaning |
+|---|---|
+| `id`, `detector`, `pair` | `<det>/<A>__<B>`, detector name, pair name |
+| `n_matches`, `n_inliers` | Lowe matches, inliers of F and E |
+| `rot_deg` | rotation angle of `R` in degrees (NaN if no pose) |
+| `t_x`, `t_y`, `t_z` | unit translation direction |
+| `n_pose_inliers` | inliers that pass the cheirality check in `recoverPose` |
+| `n_points3d` | triangulated points kept (in front of both cameras) |
+| `parallax_med_deg` | median triangulation angle between the two rays |
+| `cheirality_frac` | kept / triangulated points |
 
-Preliminary test (6 frames, 1 s apart, 3 reps):
-
-| | SIFT | ORB | AKAZE |
-|---|---|---|---|
-| detection (ms) | 644 | 86 | 828 |
-| inliers / pair | 49 | 116 | 156 |
-| matching (ms) | 29 | 30 | 19 |
-
-AKAZE gives the most inliers per pair, the best spatial coverage and a compact binary
-descriptor (61 B vs 512 B for SIFT). Its slower detection does not matter offline,
-because reconstruction quality depends on inliers and coverage. ORB is the choice
-when time is the constraint. Confirm with `summary.csv` on the full frame set.
+Per-detector medians of these metrics go to `results/<id>/run.log`.
