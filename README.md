@@ -247,6 +247,7 @@ the effect (compare its reprojection and dense metrics with `default` in the abl
 | Open3D cleanup | Open3D CUDA build | `cleanup.device: auto\|CPU:0\|CUDA:0` |
 | viewer orbit rendering | OpenGL / EGL | `viewer.offscreen` |
 | Gaussian Splatting train/render/metrics | always CUDA (else skipped) | `gaussian_splatting.gpu_index`, `gaussian_splatting.data_device` |
+| SfM with InstantSfM, MASt3R-SfM or VGGT | always CUDA, `.venv-gpu` (see [README-GPU.md](README-GPU.md)) | `sfm.technique`, `sfm.instantsfm`, `sfm.mast3r_sfm`, `sfm.vggt` |
 
 Poisson (`poisson.threads`), Close Holes and OpenMVS (`dense.openmvs.max_threads`) run on the CPU.
 

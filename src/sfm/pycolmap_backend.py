@@ -148,9 +148,9 @@ def build_options(scfg: dict, cam_params: list[float] | None, seed: int, vocab: 
         mapper.min_num_matches = int(scfg["min_num_matches"])
         mapper.multiple_models = bool(scfg["multiple_models"])
         mapper.ba_use_gpu, mapper.ba_gpu_index = ba_gpu, idx
-        for name in ("ba_global_max_num_iterations", "ba_global_max_refinements"):
+        for name in ("ba_global_max_num_iterations", "ba_global_max_refinements", "ba_global_frames_ratio"):
             if scfg.get(name) is not None:
-                setattr(mapper, name, int(scfg[name]))
+                setattr(mapper, name, type(getattr(mapper, name))(scfg[name]))  # int counts, float ratio
         if fixed:
             mapper.ba_refine_focal_length = mapper.ba_refine_principal_point = mapper.ba_refine_extra_params = False
     elif scfg["mapper"] == "global":
@@ -376,6 +376,7 @@ if __name__ == "__main__":
     o = build_options({**s, "mapper": "incremental", "ba_global_max_refinements": 3, "use_gpu": True,
                        "ba_use_gpu": True}, params, 1, None)
     assert o["mapper"].ba_global_max_refinements == 3 and o["mapper"].ba_use_gpu and o["mapper"].ba_gpu_index == "0"
+    assert build_options({**s, "mapper": "incremental", "ba_global_frames_ratio": 1.3}, params, 1, None)["mapper"].ba_global_frames_ratio == 1.3
     assert not o["mapper"].ba_refine_focal_length and not o["mapper"].ba_refine_extra_params
 
     with tempfile.TemporaryDirectory() as tmp:

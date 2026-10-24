@@ -36,7 +36,7 @@ from src.evaluation import ablation, hard_regions, loop_drift, metric_error, rep
 from src.export import meshlab
 from src.gs import gaussian_splatting
 from src.mesh import close_holes, liepa, mesh, poisson
-from src.sfm import colmap, convert, scale
+from src.sfm import colmap, convert, instantsfm, mast3r_sfm, scale, vggt
 
 log = logging.getLogger("main")
 
@@ -158,7 +158,9 @@ def main():
         stage("two_view", two_view.run, full_cfg, run_dir, ext.output_dir, artifacts_dir)
 
     if cfg.sfm.enabled:
-        stage("sfm", colmap.run, full_cfg, run_dir, artifacts_dir)
+        sfm_runs = {"colmap": colmap.run, "glomap": colmap.run, "instantsfm": instantsfm.run,
+                    "mast3r_sfm": mast3r_sfm.run, "vggt": vggt.run}
+        stage("sfm", sfm_runs[cfg.sfm.technique], full_cfg, run_dir, artifacts_dir)
         stage("sfm_convert", convert.run, full_cfg, run_dir, artifacts_dir)
 
     if cfg.scale.enabled:

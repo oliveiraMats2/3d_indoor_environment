@@ -1,0 +1,5 @@
+# Installed with --no-deps after requirements.txt (their own pins would downgrade numpy/opencv):
+#   uv pip install --python .venv-gpu/bin/python --no-deps -r requirements-nodeps.txt
+# InstantSfM 0.3.0 (CC BY-NC 4.0) and VGGT (VGGT License for the code; weights facebook/VGGT-1B are CC BY-NC 4.0)
+instantsfm @ git+https://github.com/cre185/InstantSfM@d3e599e1a42b4c5a806a84d9f383e1005d25f61b
+vggt @ git+https://github.com/facebookresearch/vggt@a288dd0f14786c93483e45524328726ab7b1b4ce

@@ -1,0 +1,5 @@
+# CUDA extension compiled against the installed torch (needs torch first and a CUDA toolkit >= 12.8 for sm_120):
+#   CUDA_HOME=/path/to/cuda-12.8 TORCH_CUDA_ARCH_LIST=12.0 USE_CUDSS=0 \
+#     uv pip install --python .venv-gpu/bin/python --no-build-isolation --no-deps -r requirements-build.txt
+# bae: sparse PCG bundle adjustment used by InstantSfM (USE_CUDSS=0: InstantSfM only calls the PCG solver)
+bae @ git+https://github.com/zitongzhan/bae@e311a619a0ca14d37dd4468909c916ff11273914

@@ -83,7 +83,27 @@ class Evaluation(Strict):
     loop_closed: Optional[bool] = None; hard_regions: bool = True; texture_radius_px: float = 30.0
     texture_split_quantile: float = 0.5; inlier_px: float = 2.0
 
+class InstantSfm(Strict):  # src/sfm/instantsfm.py
+    num_iteration_bundle_adjustment: int = 3; ba_max_num_iterations: int = 100
+    skip_view_graph_calibration: bool = False; skip_retriangulation: bool = True; skip_pruning: bool = True
+    max_frames: Optional[int] = None  # None = every frame (scales to thousands)
+    ba: bool = False  # extra pycolmap BA after the retriangulation (InstantSfM already ran its GPU BA)
+
+class Mast3rSfm(Strict):  # src/sfm/mast3r_sfm.py
+    repo_dir: str = "~/mast3r"; weights: str = "naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+    retrieval_url: str = "https://download.europe.naverlabs.com/ComputerVision/MASt3R"; weights_dir: str = "~/.cache/mast3r"
+    image_size: int = 512; max_frames: Optional[int] = 200  # uniform subsample; memory and pairs grow with it
+    scene_graph: Literal["retrieval", "swin"] = "retrieval"; retrieval_na: int = 20; retrieval_k: int = 10; window: int = 10
+    lr1: float = 0.07; niter1: int = 300; lr2: float = 0.01; niter2: int = 300
+    optim_level: Literal["coarse", "refine", "refine+depth"] = "refine+depth"; matching_conf_thr: float = 0.0
+    shared_intrinsics: bool = True; subsample: int = 8; ba: bool = True; refine_intrinsics: bool = True
+
+class Vggt(Strict):  # src/sfm/vggt.py
+    weights: str = "facebook/VGGT-1B"; image_size: int = 518; max_frames: Optional[int] = 80  # one forward pass: VRAM-bound
+    dtype: Literal["auto", "bf16", "fp16", "fp32"] = "auto"; ba: bool = True; refine_intrinsics: bool = True
+
 class Sfm(Strict):
+    technique: Literal["colmap", "glomap", "instantsfm", "mast3r_sfm", "vggt"] = "colmap"  # glomap = colmap with mapper global
     enabled: bool = True; rerun: bool = False; colmap_bin: str = "colmap"; camera_model: str = "OPENCV"
     single_camera: bool = True; intrinsics: Literal["estimate", "fixed"] = "estimate"
     fixed_dist: list[float] = [0.0, 0.0, 0.0, 0.0]; matcher: Literal["sequential", "exhaustive"] = "sequential"
@@ -92,9 +112,11 @@ class Sfm(Strict):
     ba_use_gpu: bool = False; max_image_size: int = 1920; max_num_features: int = 8192
     min_num_matches: int = 15; multiple_models: bool = True
     ba_global_max_num_iterations: Optional[int] = None; ba_global_max_refinements: Optional[int] = None
+    ba_global_frames_ratio: Optional[float] = None  # None = COLMAP 1.1; 1.3 = fewer global BAs (incremental only)
     project_quality: Literal["low", "medium", "high", "extreme"] = "high"
     link_images: Literal["auto", "hardlink", "symlink", "copy"] = "auto"  # how exports/colmap/images/ holds the frames
     backend: Literal["auto", "cli", "pycolmap"] = "auto"  # auto = COLMAP CLI when sfm.colmap_bin is found, else pycolmap
+    instantsfm: InstantSfm = InstantSfm(); mast3r_sfm: Mast3rSfm = Mast3rSfm(); vggt: Vggt = Vggt()
 
 class Click(Strict): image: str; x: float; y: float
 class ManualPair(Strict):

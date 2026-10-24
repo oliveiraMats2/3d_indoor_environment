@@ -1,0 +1,57 @@
+# GPU environment (.venv-gpu) for sfm.technique: instantsfm | mast3r_sfm | vggt (README-GPU.md).
+# uv style, no conda. Tested: Linux x86_64, Python 3.12, RTX 5080 (sm_120), driver 580, CUDA 12.8 wheels.
+#   uv venv .venv-gpu --python 3.12
+#   uv pip install --python .venv-gpu/bin/python -r requirements.txt
+#   uv pip install --python .venv-gpu/bin/python --no-deps -r requirements-nodeps.txt
+#   CUDA_HOME=<CUDA toolkit >= 12.8> TORCH_CUDA_ARCH_LIST=12.0 USE_CUDSS=0 \
+#     uv pip install --python .venv-gpu/bin/python --no-build-isolation --no-deps -r requirements-build.txt
+#   + asmk (MASt3R retrieval) and the MASt3R clone: README-GPU.md
+# The CPU pipeline keeps using `uv sync` (pyproject.toml / uv.lock, .venv); this file repeats its dependencies
+# so one interpreter runs main.py end to end with the GPU techniques.
+
+# PyTorch for CUDA 12.8 (first wheels with Blackwell sm_120), as direct wheels: an --extra-index-url would make
+# uv take tqdm/numpy/... from the PyTorch index too (first-index strategy). Other Python: swap cp312 in the URLs.
+torch @ https://download.pytorch.org/whl/cu128/torch-2.8.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl
+torchvision @ https://download.pytorch.org/whl/cu128/torchvision-0.23.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl
+
+# pipeline (pyproject.toml) + pycolmap with CUDA (features/matching/triangulation/BA of every technique)
+opencv-contrib-python==5.0.0.93
+numpy==2.5.2
+pyyaml==6.0.3
+pydantic==2.14.1
+tqdm==4.70.1
+trimesh==5.1.1
+open3d==0.20.0
+pymeshlab==2025.7.post1
+pandas==3.1.0
+matplotlib==3.11.2
+networkx==3.6.1
+jinja2==3.1.6
+plotly==7.1.0
+scipy==1.18.1
+pycolmap-cuda12==4.2.1
+pytest==9.1.1
+
+# instantsfm runtime (its own pins numpy==1.26 / opencv 4.10 / scikit-sparse are skipped: requirements-nodeps.txt;
+# sksparse.cholmod is replaced by a scipy shim in src/sfm/instantsfm.py)
+pyceres==2.3
+kornia==0.8.0
+pypose @ git+https://github.com/pypose/pypose.git@9345958013d4cc73b3d03f6be54236135332699b
+
+# bae build (requirements-build.txt): CUDA extension + warp kernels
+setuptools==78.1.0
+wheel==0.48.0
+ninja==1.13.2
+warp-lang==1.18.0
+
+# vggt runtime (its pyproject pins numpy<2: installed with --no-deps)
+einops==0.8.2
+safetensors==0.8.0
+pillow==12.3.0
+huggingface-hub==2.3.0
+
+# mast3r / dust3r runtime (the repo is a clone on sys.path, sfm.mast3r_sfm.repo_dir) + asmk retrieval build
+roma==1.8.0
+faiss-cpu==1.15.1
+cython==3.3.0
+pyaml==26.7.0

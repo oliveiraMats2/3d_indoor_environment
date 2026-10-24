@@ -1,6 +1,7 @@
 __pycache__/
 .vscode/
 .venv/
+.venv-gpu/
 *.egg-info/
 .pytest_cache/
 
@@ -41,3 +42,6 @@ results/
 
 # run logs
 *.log
+
+# workspace of the parede_sala_GPU_<technique>.yaml runs (GPU SfM techniques)
+/parede_sala_GPU/

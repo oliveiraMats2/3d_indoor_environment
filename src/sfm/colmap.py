@@ -23,11 +23,11 @@
 # Out   : <run_dir>/exports/colmap/{images/ (symlinks), database.db, sparse/0/*.bin+*.txt, sparse.ply,
 #         project.ini, colmap.log}; artifacts_dir/sfm_metrics.csv (row key run_id, merged with the
 #         columns other sfm modules write): t_feature_s, t_match_s, t_mapper_s, t_total_s, matcher, mapper.
-# YAML  : sfm.{enabled, rerun, colmap_bin, camera_model, single_camera, intrinsics (estimate|fixed),
+# YAML  : sfm.{technique (colmap|glomap here; glomap forces mapper global), enabled, rerun, colmap_bin, camera_model, single_camera, intrinsics (estimate|fixed),
 #         fixed_dist [k1,k2,p1,p2], matcher (sequential|exhaustive), sequential_overlap, loop_detection,
 #         vocab_tree, mapper (incremental|global), use_gpu, gpu_index, ba_use_gpu, max_image_size,
 #         max_num_features, min_num_matches, multiple_models, ba_global_max_num_iterations,
-#         ba_global_max_refinements, project_quality, backend (auto|cli|pycolmap)}.
+#         ba_global_max_refinements, ba_global_frames_ratio, project_quality, backend (auto|cli|pycolmap)}.
 # Backend: the COLMAP CLI below is the primary path. backend(cfg) picks it whenever sfm.colmap_bin is a
 #         COLMAP >= 4.0 (auto); pycolmap (src/sfm/pycolmap_backend.py, same outputs and CSV columns) only
 #         when the binary is missing or with sfm.backend: pycolmap.
@@ -237,8 +237,8 @@ def build_commands(scfg: dict, ws: Path, cam_params: list[float] | None, seed: i
                   "--Mapper.multiple_models", _b(scfg["multiple_models"]),
                   "--Mapper.ba_use_gpu", _b(scfg["use_gpu"] and scfg["ba_use_gpu"]),
                   "--Mapper.ba_gpu_index", gpu_idx]
-        for name in ("ba_global_max_num_iterations", "ba_global_max_refinements"):
-            if scfg.get(name) is not None:
+        for name in ("ba_global_max_num_iterations", "ba_global_max_refinements", "ba_global_frames_ratio"):
+            if scfg.get(name) is not None:  # frames_ratio 1.1 (COLMAP) -> 1.3 = fewer global BAs, ~30-50% faster
                 mapper += [f"--Mapper.{name}", str(scfg[name])]
         prefix = "--Mapper."
     elif scfg["mapper"] == "global":
@@ -385,6 +385,10 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         log.info("sfm disabled")
         return None
 
+    if scfg.get("technique") == "glomap":  # GLOMAP = COLMAP 4 global_mapper
+        cfg = {**cfg, "sfm": {**scfg, "mapper": "global"}}
+        scfg = cfg["sfm"]
+
     if backend(cfg) == "pycolmap":
         from src.sfm import pycolmap_backend
         return pycolmap_backend.run(cfg, run_dir, artifacts_dir)
@@ -469,7 +473,8 @@ DEFAULTS = {"enabled": True, "rerun": False, "colmap_bin": "colmap", "camera_mod
             "matcher": "sequential", "sequential_overlap": 10, "loop_detection": False, "vocab_tree": None,
             "mapper": "incremental", "use_gpu": "auto", "gpu_index": "0", "ba_use_gpu": False,
             "max_image_size": 1920, "max_num_features": 8192, "min_num_matches": 15, "multiple_models": True,
-            "ba_global_max_num_iterations": None, "ba_global_max_refinements": None, "project_quality": "high",
+            "ba_global_max_num_iterations": None, "ba_global_max_refinements": None,
+            "ba_global_frames_ratio": None, "project_quality": "high",
             "link_images": "auto", "backend": "auto"}
 
 if __name__ == "__main__":
@@ -530,7 +535,11 @@ if __name__ == "__main__":
     assert all(flag(c["mapper"], f"--Mapper.{n}") == "0"
                for n in ("ba_refine_focal_length", "ba_refine_principal_point", "ba_refine_extra_params"))
     assert flag(c["mapper"], "--Mapper.ba_global_max_refinements") == "3"
-    assert "--Mapper.ba_global_max_num_iterations" not in c["mapper"]
+    assert "--Mapper.ba_global_max_num_iterations" not in c["mapper"] and "--Mapper.ba_global_frames_ratio" not in c["mapper"]
+    c = build_commands({**s, "mapper": "incremental", "ba_global_frames_ratio": 1.3}, ws, params, 1)
+    assert flag(c["mapper"], "--Mapper.ba_global_frames_ratio") == "1.3"
+    c = build_commands({**s, "ba_global_frames_ratio": 1.3}, ws, params, 1)  # global mapper: incremental-only key ignored
+    assert "--Mapper.ba_global_frames_ratio" not in c["mapper"]
 
     # fixed with fx null -> estimate; PINHOLE -> 4 params; unsupported model -> estimate
     assert resolve_intrinsics(s, {"fx": None}, (10, 10)) is None
