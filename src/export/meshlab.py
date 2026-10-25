@@ -21,7 +21,7 @@
 # Goal: gather every cloud/mesh of the run in one folder MeshLab opens as a project, plus a filter script
 #   (normals -> Screened Poisson -> remove isolated pieces -> remove unreferenced vertices).
 # In:  exports/colmap/sparse.ply, dense/<method>/fused.ply, clean/<source>/cloud_clean.ply,
-#      exports/meshlab/{poisson_*.ply, close_holes_*.ply} (poisson / close_holes stages),
+#      exports/meshlab/{poisson_*.ply, close_holes_*.ply, room_*.ply} (poisson / close_holes / room_fill stages),
 #      exports/meshlab/mesh.ply (mesh stage). Out: exports/meshlab/{sparse.ply, fused_<method>.ply,
 #      cloud_clean_<source>.ply, project.mlp, process.mlx}. Missing inputs are skipped with INFO.
 #      Poisson threads in process.mlx = poisson.threads (fallback PORTABLE_THREADS when <= 0 or absent),
@@ -41,7 +41,7 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 IDENTITY = "\n1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 \n"
-MESH_LAYERS = ("poisson_*.ply", "close_holes_*.ply")  # copies written by the poisson / close_holes stages
+MESH_LAYERS = ("poisson_*.ply", "close_holes_*.ply", "room_*.ply")  # copies written by poisson / close_holes / room_fill
 PORTABLE_THREADS = 8  # process.mlx Poisson threads when poisson.threads is absent or <= 0 (-1 = all cores)
 
 def collect_layers(cfg: dict, run_dir: Path, out_dir: Path) -> list[Path]:

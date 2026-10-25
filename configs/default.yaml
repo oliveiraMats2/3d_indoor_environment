@@ -280,6 +280,16 @@ liepa:                        # src/mesh/liepa.py (Liepa 2003 hole filling: tria
   fairing: 2                  # 2 = thin plate (bi-Laplacian, paper) | 1 = membrane (Laplacian) | 0 = flat, no fairing
   max_refine_iters: 30        # cap on the split/relax rounds per hole
 
+room_fill:                    # src/mesh/room_fill.py: flat floor/ceiling (walls) from a hand-measured room outline
+  enabled: false              # true -> mesh/room_fill/{room_fill,room_scene}.ply + exports/meshlab copies; false -> stage skipped
+  footprint_cm: []            # [[x, y], ...] room outline measured by hand, cm, either orientation; [] -> stage skipped
+  ceiling_height_cm: null     # null = estimated from the reconstruction (ceiling plane, else top percentile of points)
+  surfaces: [floor, ceiling]  # any of floor | ceiling | walls
+  source: patch_match         # cloud used for the fit and the coverage test: sparse | patch_match | openmvs (clean/<source>/points.npy)
+  grid_cm: 5.0                # side of the fill grid cells
+  max_gap_cm: 5.0             # a cell closer than this to the reconstruction is already covered (not filled)
+  fit_rotations: 72           # initial rotations tried by the outline fit
+
 mesh:                         # src/mesh/mesh.py (formats + scene of ONE chosen mesh)
   enabled: true
   input: close_holes          # close_holes (pre_pre) | poisson (pre) | liepa: mesh exported to PLY/OBJ/STL/OFF/GLB

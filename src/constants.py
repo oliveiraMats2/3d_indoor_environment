@@ -184,6 +184,14 @@ class Liepa(Strict):
     enabled: bool = False; input: Literal["poisson", "close_holes"] = "poisson"; max_hole_edges: int = 200
     density: float = 2 ** 0.5; fairing: Literal[0, 1, 2] = 2; max_refine_iters: int = 30
 
+class RoomFill(Strict):  # src/mesh/room_fill.py
+    enabled: bool = False
+    footprint_cm: list[Annotated[list[float], Field(min_length=2, max_length=2)]] = []  # [] -> stage skipped
+    ceiling_height_cm: Optional[float] = None  # None = estimated from the reconstruction
+    surfaces: list[Literal["floor", "ceiling", "walls"]] = ["floor", "ceiling"]
+    source: Literal["sparse", "patch_match", "openmvs"] = "patch_match"
+    grid_cm: float = 5.0; max_gap_cm: float = 5.0; fit_rotations: int = 72
+
 class Mesh(Strict):
     enabled: bool = True; input: Literal["close_holes", "poisson", "liepa"] = "close_holes"
     frustum_cm: float = 20; frustum_every: int = 5; trajectory_cm: float = 1.0
@@ -210,5 +218,5 @@ class Config(Strict):
     planes: Planes = Planes(); floorplan: Floorplan = Floorplan(); dense: Dense = Dense()
     dense_compare: DenseCompare = DenseCompare(); gaussian_splatting: GaussianSplatting = GaussianSplatting()
     poisson: Poisson = Poisson(); close_holes: CloseHoles = CloseHoles()
-    liepa: Liepa = Liepa(); mesh: Mesh = Mesh(); export: Export = Export()
+    liepa: Liepa = Liepa(); room_fill: RoomFill = RoomFill(); mesh: Mesh = Mesh(); export: Export = Export()
     viewer: Viewer = Viewer(); videos: Videos = Videos()

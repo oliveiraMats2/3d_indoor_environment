@@ -35,7 +35,7 @@ from src.epipolar import two_view
 from src.evaluation import ablation, hard_regions, loop_drift, metric_error, reprojection
 from src.export import meshlab
 from src.gs import gaussian_splatting
-from src.mesh import close_holes, liepa, mesh, poisson
+from src.mesh import close_holes, liepa, mesh, poisson, room_fill
 from src.sfm import colmap, convert, instantsfm, mast3r_sfm, scale, vggt
 
 log = logging.getLogger("main")
@@ -198,6 +198,9 @@ def main():
 
     if cfg.liepa.enabled:
         stage("liepa", liepa.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.room_fill.enabled:  # reads the mesh chosen by mesh.input, so it runs before the mesh stage
+        stage("room_fill", room_fill.run, full_cfg, run_dir, artifacts_dir)
 
     if cfg.mesh.enabled:
         stage("mesh", mesh.run, full_cfg, run_dir, artifacts_dir)
