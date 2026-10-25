@@ -21,7 +21,8 @@
 # Goal  : cameras of up to sfm.vggt.max_frames frames from one VGGT forward pass on the GPU, written as a
 #         COLMAP model in the same workspace as colmap.py.
 # In    : frames cfg["extraction"]["output_dir"]/img_*; cfg["sfm"] (matcher, use_gpu, camera_model, ...) and
-#         cfg["sfm"]["vggt"].{weights, image_size, max_frames, dtype, ba, refine_intrinsics}.
+#         cfg["sfm"]["vggt"].{weights, image_size, max_frames, dtype, matcher, ba, refine_intrinsics,
+#         min_points_per_image}.
 # Out   : gpu.py contract: <run_dir>/exports/colmap/{images/ (only the used frames), database.db, sparse/0,
 #         sparse.ply, project.ini, colmap.log}; sfm_metrics.csv with t_load_s, t_vggt_s, t_feature_s,
 #         t_match_s, t_triangulate_s, t_ba_s, vram_peak_gb.
@@ -116,9 +117,10 @@ def _child(cfg: dict, ws: str, frames: list[str], state_path: str) -> None:
 
     poses = {f.name: extrinsic[i] for i, f in enumerate(frames)}
     intrinsics = {f.name: to_original(intrinsic[i], size_in, size_orig) for i, f in enumerate(frames)}
-    gpu.extract_and_match(scfg, ws, seed, state)
+    gpu.extract_and_match(scfg, ws, seed, state, matcher=vcfg["matcher"])
     rec = gpu.posed_reconstruction(ws, poses, intrinsics, shared=bool(scfg["single_camera"]))
-    gpu.triangulate(ws, rec, state, ba=bool(vcfg["ba"]), refine_intrinsics=bool(vcfg["refine_intrinsics"]))
+    gpu.triangulate(ws, rec, state, ba=bool(vcfg["ba"]), refine_intrinsics=bool(vcfg["refine_intrinsics"]),
+                    min_points=int(vcfg["min_points_per_image"]))
     state.done()
 
 def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
@@ -148,8 +150,8 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
 
     return gpu.finish(cfg, ws, TECHNIQUE, len(frames), artifacts_dir, exitcode, state, t0)
 
-DEFAULTS = {"weights": "facebook/VGGT-1B", "image_size": 518, "max_frames": 80, "dtype": "auto", "ba": True,
-            "refine_intrinsics": True}
+DEFAULTS = {"weights": "facebook/VGGT-1B", "image_size": 518, "max_frames": 80, "dtype": "auto",
+            "matcher": "exhaustive", "ba": True, "refine_intrinsics": True, "min_points_per_image": 50}
 
 if __name__ == "__main__":
     assert input_size(1080, 1920, 518) == (294, 518)

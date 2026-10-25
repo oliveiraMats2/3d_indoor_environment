@@ -23,7 +23,8 @@
 #         COLMAP mapper, written in the same workspace.
 # In    : frames cfg["extraction"]["output_dir"]/img_*; cfg["sfm"] (features/matching keys, intrinsics fixed
 #         -> focal prior) and cfg["sfm"]["instantsfm"].{num_iteration_bundle_adjustment, ba_max_num_iterations,
-#         skip_view_graph_calibration, skip_retriangulation, skip_pruning, max_frames, ba}.
+#         skip_view_graph_calibration, skip_retriangulation, skip_pruning, max_frames, min_track_length, ba,
+#         min_points_per_image}.
 # Out   : gpu.py contract (database.db, sparse/0 = largest cluster, ...); sfm_metrics.csv with t_feature_s,
 #         t_match_s, t_read_s, t_mapper_s, t_triangulate_s, t_ba_s, vram_peak_gb.
 # Rules : license CC BY-NC 4.0. Its scikit-sparse dependency only provides cholesky(A)(b): when sksparse is not
@@ -31,11 +32,15 @@
 #         Track ids are renumbered 0..n-1 (upstream keys overflow its int32 container, compact_track_ids()).
 #         Its writer leaves inconsistent points2D, so sparse/0 is rebuilt from its cameras (largest cluster)
 #         with gpu.triangulate(), the same path as mast3r_sfm and vggt.
+#         min_track_length drops short tracks before global positioning / BA: its dense J^T J grows with the
+#         tracks (about 400k tracks of 1850 frames at length 3 do not fit in 16 GB). The child sets
+#         PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True (less fragmentation) unless already set.
 #         Never runs the ins-feat / ins-sfm scripts (they shell out to colmap).
 
 # >>> BEGIN IMPLEMENTATION >>>
 """InstantSfM sfm technique: pycolmap SIFT + matching, InstantSfM global mapper on the GPU, COLMAP model."""
 import logging
+import os
 import sys
 import time
 import types
@@ -89,6 +94,7 @@ def _child(cfg: dict, ws: str, state_path: str) -> None:
     """Spawned child: SIFT + match (pycolmap) -> InstantSfM ReadColmapDatabase / SolveGlobalMapper /
     WriteGlomapReconstruction -> sparse/<cluster>."""
 
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")  # before torch touches CUDA
     ws = Path(ws)
     gpu.redirect_output(ws)
     scfg, icfg = cfg["sfm"], cfg["sfm"]["instantsfm"]
@@ -119,12 +125,15 @@ def _child(cfg: dict, ws: str, state_path: str) -> None:
                 "skip_pruning"):
         config.OPTIONS[key] = icfg[key]
     config.BUNDLE_ADJUSTER_OPTIONS["max_num_iterations"] = int(icfg["ba_max_num_iterations"])
+    for options in (config.TRACK_ESTABLISHMENT_OPTIONS, config.GLOBAL_POSITIONER_OPTIONS):
+        options["min_num_view_per_track"] = int(icfg["min_track_length"])
     cameras, images, tracks = state.step("mapper", SolveGlobalMapper, view_graph, cameras, images, config,
                                          visualizer=None)
     poses, intrinsics = solved_cameras(cameras, images)
     print(f"instantsfm: {len(poses)} registered images in the largest cluster", flush=True)
     rec = gpu.posed_reconstruction(ws, poses, intrinsics, shared=bool(scfg["single_camera"]))
-    gpu.triangulate(ws, rec, state, ba=bool(icfg["ba"]), refine_intrinsics=False)
+    gpu.triangulate(ws, rec, state, ba=bool(icfg["ba"]), refine_intrinsics=False,
+                    min_points=int(icfg["min_points_per_image"]))
     state.done()
 
 def solved_cameras(cameras, images) -> tuple[dict, dict]:
@@ -177,7 +186,8 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
     return gpu.finish(cfg, ws, TECHNIQUE, len(frames), artifacts_dir, exitcode, state, t0)
 
 DEFAULTS = {"num_iteration_bundle_adjustment": 3, "ba_max_num_iterations": 100, "skip_view_graph_calibration": False,
-            "skip_retriangulation": True, "skip_pruning": True, "max_frames": None, "ba": False}
+            "skip_retriangulation": True, "skip_pruning": True, "max_frames": None, "min_track_length": 3, "ba": False,
+            "min_points_per_image": 50}
 
 if __name__ == "__main__":
     import numpy as np

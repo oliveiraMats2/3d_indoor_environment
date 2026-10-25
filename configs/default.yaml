@@ -143,7 +143,9 @@ sfm:                          # src/sfm/colmap.py + convert.py (COLMAP >= 4.0 CL
     skip_retriangulation: true
     skip_pruning: true
     max_frames: null          # null = every frame
+    min_track_length: 3       # shorter tracks dropped before positioning/BA; raise it when the GPU runs out of memory
     ba: false                 # extra pycolmap BA after retriangulating with its poses (it already ran its GPU BA)
+    min_points_per_image: 50  # images seeing fewer 3D points are deregistered
   mast3r_sfm:                 # src/sfm/mast3r_sfm.py: MASt3R pairs + sparse global alignment (CC BY-NC-SA 4.0)
     repo_dir: ~/mast3r        # git clone --recursive https://github.com/naver/mast3r (README-GPU.md)
     weights: naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric  # official checkpoint (Hugging Face hub)
@@ -165,6 +167,8 @@ sfm:                          # src/sfm/colmap.py + convert.py (COLMAP >= 4.0 CL
     subsample: 8
     ba: true                  # pycolmap BA on the SIFT tracks triangulated with the MASt3R poses
     refine_intrinsics: true
+    matcher: exhaustive       # SIFT pairs of the subsampled frames (far apart in time) | sfm = sfm.matcher
+    min_points_per_image: 50  # images seeing fewer 3D points are deregistered (textureless views; dense needs sources)
   vggt:                       # src/sfm/vggt.py: one feed-forward pass for the cameras
     weights: facebook/VGGT-1B # official weights (CC BY-NC 4.0); facebook/VGGT-1B-Commercial is gated (HF login)
     image_size: 518           # long side; short side keeps the aspect (multiple of 14)
@@ -172,6 +176,8 @@ sfm:                          # src/sfm/colmap.py + convert.py (COLMAP >= 4.0 CL
     dtype: auto               # auto = bf16 on sm_80+ | bf16 | fp16 | fp32
     ba: true                  # pycolmap BA on the SIFT tracks triangulated with the VGGT poses
     refine_intrinsics: true
+    matcher: exhaustive       # SIFT pairs of the subsampled frames (far apart in time) | sfm = sfm.matcher
+    min_points_per_image: 50  # images seeing fewer 3D points are deregistered (textureless views; dense needs sources)
 
 scale:                        # src/sfm/scale.py
   enabled: true

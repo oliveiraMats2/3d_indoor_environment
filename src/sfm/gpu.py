@@ -170,13 +170,17 @@ def spawn(target, args: tuple, ws: Path) -> tuple[int, dict]:
 
     return child.exitcode, state
 
-def extract_and_match(scfg: dict, ws: Path, seed: int, state: State, camera_params: list[float] | None = None) -> None:
-    """Child side: pycolmap SIFT + matching (sfm.matcher, GPU when available) into ws/database.db; same
-    options as the pycolmap backend of colmap.py. camera_params fixed the shared camera (OPENCV/PINHOLE)."""
+def extract_and_match(scfg: dict, ws: Path, seed: int, state: State, camera_params: list[float] | None = None,
+                      matcher: str = "sfm") -> None:
+    """Child side: pycolmap SIFT + matching (GPU when available) into ws/database.db; same options as the
+    pycolmap backend of colmap.py. camera_params fixed the shared camera (OPENCV/PINHOLE). matcher "sfm" =
+    sfm.matcher; "exhaustive" for subsampled frames, whose neighbours in time are far apart."""
 
     import pycolmap as pc
 
     scfg = {**scfg, "use_gpu": cli.resolve_gpu(scfg["use_gpu"], pycolmap_backend.gpu_info())}
+    if matcher != "sfm":
+        scfg["matcher"] = matcher
     vocab = pycolmap_backend.resolve_vocab_tree(scfg.get("vocab_tree")) \
         if scfg["matcher"] == "sequential" and scfg["loop_detection"] else None
     opt = pycolmap_backend.build_options(scfg, camera_params, seed, vocab)
@@ -240,9 +244,11 @@ def posed_reconstruction(ws: Path, poses: dict, intrinsics: dict, shared: bool):
 
     return rec
 
-def triangulate(ws: Path, rec, state: State, ba: bool, refine_intrinsics: bool):
+def triangulate(ws: Path, rec, state: State, ba: bool, refine_intrinsics: bool, min_points: int = 0):
     """Child side: pycolmap.triangulate_points with the posed cameras -> ws/sparse/0; optional bundle
-    adjustment (poses + intrinsics when refine_intrinsics), then points over 4 px or under 1.5 deg dropped."""
+    adjustment (poses + intrinsics when refine_intrinsics), then points over 4 px or under 1.5 deg dropped.
+    Images seeing fewer than min_points 3D points are deregistered: a pose the matches do not confirm
+    (textureless view) and, for dense patch_match, a reference view without source views."""
 
     import pycolmap as pc
 
@@ -256,9 +262,26 @@ def triangulate(ws: Path, rec, state: State, ba: bool, refine_intrinsics: bool):
         options.refine_extra_params = False
         state.step("ba", pc.bundle_adjustment, rec, options)
         pc.ObservationManager(rec).filter_all_points3D(4.0, 1.5)  # max reproj px, min tri angle deg (mapper defaults)
+    weak = drop_weak_images(rec, min_points)
+    if weak:
+        print(f"deregistered {len(weak)} images with < {min_points} 3D points: {', '.join(sorted(weak))}", flush=True)
     rec.write(str(out))
 
     return rec
+
+def drop_weak_images(rec, min_points: int) -> list[str]:
+    """Deregisters the frames whose images see fewer than min_points 3D points (repeated: dropping a frame
+    removes its observations from the others); returns the image names."""
+
+    dropped = []
+    while True:
+        weak = {im.frame_id: im.name for im in rec.images.values()
+                if im.has_pose and im.num_points3D < min_points}
+        if not weak:
+            return dropped
+        for frame_id, name in weak.items():
+            rec.deregister_frame(frame_id)
+            dropped.append(name)
 
 def model_stats(model: Path) -> dict:
     """Registered images, 3D points and mean reprojection error (px) of a model directory."""

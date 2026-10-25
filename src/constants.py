@@ -87,7 +87,9 @@ class InstantSfm(Strict):  # src/sfm/instantsfm.py
     num_iteration_bundle_adjustment: int = 3; ba_max_num_iterations: int = 100
     skip_view_graph_calibration: bool = False; skip_retriangulation: bool = True; skip_pruning: bool = True
     max_frames: Optional[int] = None  # None = every frame (scales to thousands)
+    min_track_length: int = 3  # shorter tracks dropped before positioning/BA; raise it when the GPU runs out of memory
     ba: bool = False  # extra pycolmap BA after the retriangulation (InstantSfM already ran its GPU BA)
+    min_points_per_image: int = 50  # images seeing fewer 3D points are deregistered
 
 class Mast3rSfm(Strict):  # src/sfm/mast3r_sfm.py
     repo_dir: str = "~/mast3r"; weights: str = "naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
@@ -97,10 +99,14 @@ class Mast3rSfm(Strict):  # src/sfm/mast3r_sfm.py
     lr1: float = 0.07; niter1: int = 300; lr2: float = 0.01; niter2: int = 300
     optim_level: Literal["coarse", "refine", "refine+depth"] = "refine+depth"; matching_conf_thr: float = 0.0
     shared_intrinsics: bool = True; subsample: int = 8; ba: bool = True; refine_intrinsics: bool = True
+    matcher: Literal["exhaustive", "sfm"] = "exhaustive"  # SIFT pairs of the subsampled frames; sfm = sfm.matcher
+    min_points_per_image: int = 50  # images seeing fewer 3D points are deregistered
 
 class Vggt(Strict):  # src/sfm/vggt.py
     weights: str = "facebook/VGGT-1B"; image_size: int = 518; max_frames: Optional[int] = 80  # one forward pass: VRAM-bound
     dtype: Literal["auto", "bf16", "fp16", "fp32"] = "auto"; ba: bool = True; refine_intrinsics: bool = True
+    matcher: Literal["exhaustive", "sfm"] = "exhaustive"  # SIFT pairs of the subsampled frames; sfm = sfm.matcher
+    min_points_per_image: int = 50  # images seeing fewer 3D points are deregistered
 
 class Sfm(Strict):
     technique: Literal["colmap", "glomap", "instantsfm", "mast3r_sfm", "vggt"] = "colmap"  # glomap = colmap with mapper global

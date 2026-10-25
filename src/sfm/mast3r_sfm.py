@@ -22,8 +22,8 @@
 #         retrieval) + sparse global alignment on the GPU, written as a COLMAP model like colmap.py.
 # In    : frames cfg["extraction"]["output_dir"]/img_*; cfg["sfm"] and cfg["sfm"]["mast3r_sfm"].{repo_dir,
 #         weights, retrieval_url, weights_dir, image_size, max_frames, scene_graph, retrieval_na, retrieval_k,
-#         window, lr1, niter1, lr2, niter2, optim_level, matching_conf_thr, shared_intrinsics, subsample, ba,
-#         refine_intrinsics}.
+#         window, lr1, niter1, lr2, niter2, optim_level, matching_conf_thr, shared_intrinsics, subsample, matcher,
+#         ba, refine_intrinsics, min_points_per_image}.
 # Out   : gpu.py contract (images/ only the used frames, database.db, sparse/0, ...) + <ws>/mast3r_cache/
 #         (pair predictions, wiped on every rebuild); sfm_metrics.csv with t_load_s, t_retrieval_s, t_mast3r_s,
 #         t_feature_s, t_match_s, t_triangulate_s, t_ba_s, vram_peak_gb.
@@ -185,9 +185,10 @@ def _child(cfg: dict, ws: str, frames: list[str], state_path: str) -> None:
     names = [Path(p).name for p in paths]
     poses = {name: np.linalg.inv(cam2w[i])[:3] for i, name in enumerate(names)}
     intrinsics = {name: to_original(Ks[i], box) for i, name in enumerate(names)}
-    gpu.extract_and_match(scfg, ws, seed, state)
+    gpu.extract_and_match(scfg, ws, seed, state, matcher=mcfg["matcher"])
     rec = gpu.posed_reconstruction(ws, poses, intrinsics, shared=bool(scfg["single_camera"]))
-    gpu.triangulate(ws, rec, state, ba=bool(mcfg["ba"]), refine_intrinsics=bool(mcfg["refine_intrinsics"]))
+    gpu.triangulate(ws, rec, state, ba=bool(mcfg["ba"]), refine_intrinsics=bool(mcfg["refine_intrinsics"]),
+                    min_points=int(mcfg["min_points_per_image"]))
     state.done()
 
 def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
@@ -226,7 +227,7 @@ DEFAULTS = {"repo_dir": "~/mast3r", "weights": "naver/MASt3R_ViTLarge_BaseDecode
             "weights_dir": "~/.cache/mast3r", "image_size": 512, "max_frames": 200, "scene_graph": "retrieval",
             "retrieval_na": 20, "retrieval_k": 10, "window": 10, "lr1": 0.07, "niter1": 300, "lr2": 0.01,
             "niter2": 300, "optim_level": "refine+depth", "matching_conf_thr": 0.0, "shared_intrinsics": True,
-            "subsample": 8, "ba": True, "refine_intrinsics": True}
+            "subsample": 8, "matcher": "exhaustive", "ba": True, "refine_intrinsics": True, "min_points_per_image": 50}
 
 if __name__ == "__main__":
     assert crop_box(1080, 1920, 512) == (3.75, 3.75, 0.0, 0.0)  # 288x512, already multiples of 16
