@@ -155,8 +155,8 @@ sfm:                          # src/sfm/colmap.py + convert.py (COLMAP >= 4.0 CL
     skip_view_graph_calibration: false
     skip_retriangulation: true
     skip_pruning: true
-    max_frames: null          # null = every frame
-    min_track_length: 3       # shorter tracks dropped before positioning/BA; raise it when the GPU runs out of memory
+    max_frames: 600           # dataset of this copy: all 1850 frames run out of 16 GB even with min_track_length 20
+    min_track_length: 8       # dataset of this copy: 3 runs out of 16 GB at 600 frames (111k tracks); 8 -> 35k tracks, 10.6 GB
     ba: false                 # extra pycolmap BA after retriangulating with its poses (it already ran its GPU BA)
     min_points_per_image: 50  # images seeing fewer 3D points are deregistered
   mast3r_sfm:                 # src/sfm/mast3r_sfm.py: MASt3R pairs + sparse global alignment (CC BY-NC-SA 4.0)
