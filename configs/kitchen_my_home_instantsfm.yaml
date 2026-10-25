@@ -1,0 +1,343 @@
+# =============================================================================
+# kitchen_my_home_instantsfm
+#   dataset  : kitchen_my_home.MOV (iPhone, 13097 frames, 436.6 s, 30 fps, landscape 3840x2160 -> frames 1920x1080)
+#   output   : kitchen_my_home/results/kitchen_my_home_instantsfm/, kitchen_my_home/artifacts/kitchen_my_home_instantsfm/
+#   frames   : kitchen_my_home/frames/stride6/ (shared by the kitchen_my_home_<technique>.yaml runs)
+#   run      : .venv-gpu/bin/python main.py kitchen_my_home_instantsfm.yaml (README-GPU.md)
+#   sfm.technique: instantsfm; same keys as parede_sala_GPU_instantsfm.yaml except the dataset lines
+#   acquisition following the room protocol (two loops, 45 deg to the walls, ceiling/floor junctions, loop closed),
+#   flagged blur/motion frames kept for SfM (keep_for_sfm_only: the motion test drops plain-wall frames)
+#
+# Full copy of configs/default.yaml for ANOTHER VIDEO (not an ablation axis): only the lines marked
+# 'dataset of this copy' differ. No inheritance: this file reads on its own.
+# =============================================================================
+# Single default experiment: one YAML = one experiment. Every key is validated by
+# main.py and unknown keys are rejected. Run: python3 main.py default.yaml (or ./run.sh default.yaml)
+
+# Layout (<ws> = extraction.video without extension): <ws>/frames/<tag>/, <ws>/results/<id>/, <ws>/artifacts/<id>/
+
+run:
+  id: null                    # null = uses THIS FILE'S NAME; outputs go to <ws>/results/<id>/
+  output_root: kitchen_my_home/results  # dataset of this copy
+  artifacts_root: kitchen_my_home/artifacts
+  seed: 42
+  log_level: INFO
+  overwrite: false
+  cache: true
+
+extraction:                   # src/extrair_quadros.py
+  rerun: false                # true = extract again (old img_* and selecao.csv in output_dir are deleted); false = reuse frames if selecao.csv exists
+  video: kitchen_my_home.MOV  # dataset of this copy
+  output_dir: kitchen_my_home/frames/stride6  # dataset of this copy: shared by the kitchen_my_home_<technique>.yaml runs
+  tag: null                   # null = SHA-1[:8] of this block without rerun/tag/output_dir (same params -> same frames)
+  selection: all              # all = every stride-th frame, dropped only by extraction.blur (overlap/sharp_percentile ignored) | overlap = greedy overlap selection
+  min_frames: 100             # all: only warns below it | overlap: lower bound of the target adjustment
+  max_frames: null            # null = no cap; all: uniform subsample down to it | overlap: upper bound of the adjustment
+  overlap: 0.70               # initial overlap target (0.60 to 0.80); overlap mode only
+  overlap_min: 0.60
+  overlap_max: 0.80
+  overlap_step: 0.025
+  max_adjust_iters: 12        # overlap mode only
+  stride: 6                   # dataset of this copy: 13097 frames at 30 fps -> 2183 (5 fps)
+  analysis_width: 640
+  nfeatures: 1000             # ORB features used only to estimate overlap
+  lowe_ratio: 0.75
+  min_good_matches: 15
+  ransac_threshold_px: 3.0
+  min_inliers: 12
+  sharp_percentile: 25        # overlap mode only: drop the blurriest 25% of sampled frames before selection
+  max_side: 1920              # longest side of saved frames (landscape or portrait: 2160x3840 -> 1080x1920)
+  image_format: png           # png = lossless; jpg allowed
+  jpeg_quality: 95
+  blur:                       # src/extraction/blur.py
+    enabled: true
+    coef_min: 0.5             # drop if lapvar / rolling median < coef_min
+    motion_ratio_max: 4.0     # drop if structure-tensor lmax/lmin > this (motion blur)
+    keep_for_sfm_only: true   # dataset of this copy: flagged frames stay for SfM, listed in mvs_exclude.txt
+    window: 9                 # neighbouring sampled frames in the rolling median
+    discard_width: 640        # width of the jpg copies in discarded/{blur,motion}/
+    discard_jpeg_quality: 90
+
+frame_quality:                # src/frame_quality.py
+  resize_width: 640
+  blur:
+    laplacian_var_min: 0.0      # dataset of this copy: wall lapvar 10.8-71.3, rely on relative_to_median
+    relative_to_median: 0.5
+  exposure:
+    mean_min: 40
+    mean_max: 215
+    clipped_max_frac: 0.05    # fraction of pixels <= 5 or >= 250
+  contrast:
+    std_min: 20.0
+  texture:
+    min_keypoints: 50         # dataset of this copy: median 103 FAST corners per frame
+    fast_threshold: 20
+
+detection:                    # src/detectores.py
+  methods: [sift, orb, akaze]
+  nfeatures: 5000
+  reps: 30
+  warmup: 2
+  max_frames: 100             # uniform subsample of the quality-kept frames fed to detection/matching/geometry/two_view; null = all (COLMAP always uses every frame)
+
+report:                       # src/relatorio.py
+  max_figures: 5
+  max_rows: 20                # rows per table in report.md
+
+filters:
+  lowe_ratio: 0.75            # lower = cleaner and fewer matches; 0.7 to 0.8 is usual (also used by detection)
+  min_matches: 10             # pairs below it are success=False
+
+matching:                     # src/matching
+  enabled: true
+  name: brute_force           # brute_force | flann; exact, FLANN mixes index error with detector quality
+  strategy: sequential        # sequential (consecutive frames) | all_pairs (ablation)
+  cross_check: false          # must stay false: knnMatch(k=2) for Lowe excludes crossCheck
+  reps: 30                    # timed runs per pair, after warmup
+  warmup: 2                   # untimed runs discarded before measurement
+  flann:
+    checks: 50
+    float_index: {algorithm: 1, trees: 5}                                          # KDTREE
+    binary_index: {algorithm: 6, table_number: 6, key_size: 12, multi_probe_level: 1}  # LSH
+
+geometry:                     # src/epipolar (F/E and RANSAC)
+  enabled: true
+  ransac:
+    method: USAC_MAGSAC       # less sensitive to the hard threshold than RANSAC
+    threshold_px: 1.0
+    confidence: 0.999
+    max_iters: 5000
+  # dataset of this copy: phone 1x lens, 1920x1080 landscape (same value that registered 194/194 on video_preview)
+  # (and by sfm.intrinsics: fixed). null fx/fy -> max(w, h); null cx/cy -> w/2, h/2
+  intrinsics: {fx: 1470.0, fy: 1470.0, cx: 960.0, cy: 540.0} # dataset of this copy
+
+visualize:
+  matches:
+    enabled: false            # true = save matching figures (Lowe + RANSAC inliers) for `samples` pairs
+    samples: 5                # registered pairs per detector, evenly spread over the sequence
+    max_lines: 100
+    dpi: 150
+    format: png
+  epilines:
+    n_lines: 20
+    dpi: 150
+
+sfm:                          # src/sfm/colmap.py + convert.py (COLMAP >= 4.0 CLI; older -> WARNING, stage skipped)
+  enabled: true
+  technique: instantsfm       # GPU copy | colmap | glomap | instantsfm | mast3r_sfm | vggt (README-GPU.md)
+  rerun: false                # false + existing sparse/0/images.bin -> reuse the model
+  colmap_bin: colmap          # not found -> WARNING, stage skipped
+  camera_model: OPENCV        # fx,fy,cx,cy,k1,k2,p1,p2
+  single_camera: true         # one shared camera (same phone/zoom)
+  intrinsics: fixed           # dataset of this copy | estimate: COLMAP estimates | fixed: geometry.intrinsics + fixed_dist, not refined in BA
+  fixed_dist: [0, 0, 0, 0]    # k1,k2,p1,p2 used only with intrinsics: fixed
+  matcher: sequential         # sequential | exhaustive
+  sequential_overlap: 10      # neighbours matched per frame (sequential)
+  loop_detection: true        # dataset of this copy: long walk ending near the start; needs vocab_tree (cached)
+  vocab_tree: "https://github.com/colmap/colmap/releases/download/3.11.1/vocab_tree_faiss_flickr100K_words256K.bin;vocab_tree_faiss_flickr100K_words256K.bin;96ca8ec8ea60b1f73465aaf2c401fd3b3ca75cdba2d3c50d6a2f6f760f275ddc"  # path or COLMAP url;name;sha256 (downloaded and cached by COLMAP), used only with loop_detection
+  mapper: incremental         # incremental (mapper) | global (global_mapper, GLOMAP)
+  use_gpu: auto               # auto = GPU when COLMAP is built with CUDA and nvidia-smi sees a GPU | true | false (SIFT + matching)
+  gpu_index: "0"
+  ba_use_gpu: false           # BA on Ceres CUDA
+  max_image_size: 1920        # max side for SIFT extraction
+  max_num_features: 8192
+  min_num_matches: 15         # min matches per pair for the mapper
+  multiple_models: true       # allow several submodels; the largest goes to sparse/0
+  ba_global_max_num_iterations: null  # null = COLMAP default (incremental only)
+  ba_global_max_refinements: null     # null = COLMAP default (incremental only)
+  ba_global_frames_ratio: null        # null = COLMAP 1.1; 1.3 = fewer global BAs, ~30-50% faster (incremental only)
+  project_quality: high       # project_generator --quality: low|medium|high|extreme
+  link_images: auto           # exports/colmap/images/: auto = hardlink, copy if refused | hardlink | symlink (relative) | copy
+  backend: auto               # auto = COLMAP CLI when colmap_bin is found (primary), else pycolmap (uv sync --extra cpu|cuda) | cli | pycolmap
+  instantsfm:                 # src/sfm/instantsfm.py: SIFT/matching above + InstantSfM global mapper on the GPU (CC BY-NC 4.0)
+    num_iteration_bundle_adjustment: 3
+    ba_max_num_iterations: 100
+    skip_view_graph_calibration: false
+    skip_retriangulation: true
+    skip_pruning: true
+    max_frames: 600           # dataset of this copy: all 1850 frames run out of 16 GB even with min_track_length 20
+    min_track_length: 12      # dataset of this copy, loop_detection on: 8 (39k tracks) runs out of 16 GB; 12 -> 25k tracks, 10.7 GB
+    ba: false                 # extra pycolmap BA after retriangulating with its poses (it already ran its GPU BA)
+    min_points_per_image: 50  # images seeing fewer 3D points are deregistered
+  mast3r_sfm:                 # src/sfm/mast3r_sfm.py: MASt3R pairs + sparse global alignment (CC BY-NC-SA 4.0)
+    repo_dir: ~/mast3r        # git clone --recursive https://github.com/naver/mast3r (README-GPU.md)
+    weights: naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric  # official checkpoint (Hugging Face hub)
+    retrieval_url: https://download.europe.naverlabs.com/ComputerVision/MASt3R  # official retrieval .pth + codebook
+    weights_dir: ~/.cache/mast3r
+    image_size: 512
+    max_frames: 200           # uniform subsample: pairs, time and VRAM grow with it
+    scene_graph: retrieval    # retrieval (retrieval-Na-k, needs asmk) | swin (sliding window)
+    retrieval_na: 20
+    retrieval_k: 10
+    window: 10                # swin only
+    lr1: 0.07
+    niter1: 300
+    lr2: 0.01
+    niter2: 300
+    optim_level: refine+depth # coarse | refine | refine+depth
+    matching_conf_thr: 0.0
+    shared_intrinsics: true
+    subsample: 8
+    ba: true                  # pycolmap BA on the SIFT tracks triangulated with the MASt3R poses
+    refine_intrinsics: true
+    matcher: exhaustive       # SIFT pairs of the subsampled frames (far apart in time) | sfm = sfm.matcher
+    min_points_per_image: 50  # images seeing fewer 3D points are deregistered (textureless views; dense needs sources)
+  vggt:                       # src/sfm/vggt.py: one feed-forward pass for the cameras
+    weights: facebook/VGGT-1B # official weights (CC BY-NC 4.0); facebook/VGGT-1B-Commercial is gated (HF login)
+    image_size: 518           # long side; short side keeps the aspect (multiple of 14)
+    max_frames: 80            # uniform subsample: a single pass must fit in VRAM
+    dtype: auto               # auto = bf16 on sm_80+ | bf16 | fp16 | fp32
+    ba: true                  # pycolmap BA on the SIFT tracks triangulated with the VGGT poses
+    refine_intrinsics: true
+    matcher: exhaustive       # SIFT pairs of the subsampled frames (far apart in time) | sfm = sfm.matcher
+    min_points_per_image: 50  # images seeing fewer 3D points are deregistered (textureless views; dense needs sources)
+
+scale:                        # src/sfm/scale.py
+  enabled: true
+  method: aruco               # aruco | manual
+  aruco_dict: DICT_4X4_50     # cv2.aruco.DICT_* name
+  marker_cm: null             # real marker side in cm; null -> scale unknown (unit=model)
+  min_parallax_deg: 1.0       # frame pairs with less parallax are ignored when triangulating the marker
+  manual_pairs: []            # [{length_cm, p: [{image,x,y},{image,x,y}], q: [{image,x,y},{image,x,y}]}]
+  provisional_extent_cm: 500  # only used to turn *_cm thresholds into model units when unit=model
+
+cleanup:                      # src/cloud/clean.py (sparse and each dense method)
+  enabled: true
+  voxel_cm: 1.0               # voxel downsampling side
+  nb_neighbors: 20            # statistical outlier removal neighbours
+  std_ratio: 2.0              # drop points with mean distance > mean + std_ratio * std
+  crop_percentiles: [1, 99]   # axis-aligned box removing extreme tails (floaters)
+  device: auto                # auto = CUDA:0 when Open3D sees a CUDA GPU, else CPU:0 | CPU:0 | CUDA:0
+
+planes:                       # src/cloud/planes.py
+  enabled: true
+  source: sparse              # sparse | patch_match | openmvs -> clean/<source>/points.npy
+  distance_cm: 2.0            # RANSAC inlier threshold
+  ransac_n: 3
+  iterations: 2000
+  max_walls: 4
+  min_inlier_frac: 0.02       # min plane inliers / total points (also stop criterion)
+  angle_tol_deg: 15           # tolerance for horizontal / vertical planes
+  max_planes: 10              # max RANSAC rounds
+
+floorplan:                    # src/cloud/floorplan.py
+  enabled: true
+  cell_cm: 5.0                # grid cell side
+  dpi: 150
+  fig_inches: 8.0             # longest side of the figure in inches
+  extent_percentiles: [1, 99] # robust percentiles for the room rectangle sides
+
+dense:                        # src/dense (patch_match.py, openmvs.py)
+  enabled: true
+  rerun: false                # false: reuse dense/<method>/fused.ply
+  methods: [patch_match]      # dataset of this copy: OpenMVS is not installed on this machine
+  max_image_size: 1600        # longest side (px); VRAM and time grow ~side^2; 640 = quick test
+  gpu_index: "0"              # "-1" = all GPUs
+  ref_step: 3                 # 1 of every N registered frames is an MVS reference; the rest stay source views (~N x faster)
+  patch_match:
+    num_iterations: 3         # COLMAP usually converges in 3 (default 5); time is linear
+    window_radius: 5          # NCC window (2r+1)^2
+    num_samples: 15           # Monte Carlo source-view samples per pixel
+    num_src_images: 20        # source images per reference
+    geom_consistency: true    # photometric + geometric pass (~2x time, much less noise)
+    cache_size: 32            # GB of CPU RAM cache
+  fusion:
+    min_num_pixels: 5         # min consistent pixels per point
+    max_reproj_error: 2.0     # px
+    max_depth_error: 0.01     # relative
+    cache_size: 32            # GB
+  openmvs:
+    bin_dir: null             # folder with InterfaceCOLMAP/DensifyPointCloud; null = PATH
+    resolution_level: 1       # 0 = full resolution, 1 = half, ...
+    number_views: 5           # neighbour views per depth map (0 = all)
+    max_threads: 0            # 0 = all cores
+
+dense_compare:                # src/dense/compare.py
+  enabled: true
+
+gaussian_splatting:           # src/gs/gaussian_splatting.py (Inria 3DGS, novel-view synthesis benchmark; optional, CUDA only)
+  enabled: true               # dataset of this copy: novel-view benchmark next to the COLMAP reconstruction
+  rerun: false                # false: reuse gaussian_splatting/data and model/point_cloud/iteration_<iterations>
+  repo_dir: ~/gaussian-splatting  # clone of github.com/graphdeco-inria/gaussian-splatting (train.py, render.py, metrics.py)
+  python: ~/gaussian-splatting/.venv/bin/python  # interpreter with torch + the built submodules
+  iterations: 30000           # training iterations (Inria default; 7000 = quick test)
+  eval: true                  # hold out every 8th image (llffhold) as test views for PSNR/SSIM/LPIPS
+  resolution: -1              # Inria -r: -1 = auto (at most 1600 px wide) | 1, 2, 4, 8 = downscale factor | else target width
+  max_image_size: 1600        # image_undistorter --max_image_size (longest side of the training images)
+  data_device: cpu            # cpu | cuda; cpu: thousands of frames do not fit in 16 GB VRAM
+  sh_degree: 3                # spherical harmonics degree of the Gaussian colours
+  gpu_index: "0"              # CUDA_VISIBLE_DEVICES of train/render/metrics
+  timeout_s: null             # null = no limit; else kill each command after this many seconds
+
+poisson:                      # src/mesh/poisson.py (Open3D)
+  enabled: true
+  source: dense               # dense -> first dense.methods with output, else sparse (WARNING) | sparse
+  variants: [pre, raw]        # pre = cleaned cloud (cleanup stage) | raw = same cloud without cleanup
+  depth: 10                   # octree depth (higher = finer, slower)
+  density_quantile: 0.05      # drop vertices with Poisson density below this quantile
+  normal_knn: 30              # neighbours for normal estimation
+  threads: 8                  # Poisson threads (-1 = all cores; much slower on many-core machines)
+
+close_holes:                  # src/mesh/close_holes.py (pymeshlab, MeshLab "Close Holes"; no pymeshlab -> WARNING, skipped)
+  enabled: true
+  variants: [pre, raw]        # pre = repair (dedupe, non-manifold, small pieces) then close | raw = close directly
+  max_hole_size: 30           # max hole size in boundary edges (MeshLab maxholesize)
+  min_component_frac: 0.01    # pre: remove isolated pieces smaller than this fraction of the bbox diagonal
+  self_intersection: true     # forbid patches that self-intersect (MeshLab selfintersection)
+
+liepa:                        # src/mesh/liepa.py (Liepa 2003 hole filling: triangulate + refine + fair; optional)
+  enabled: false              # true -> exports/meshlab/liepa_scene.ply (+ mesh/liepa/); false -> stage skipped
+  input: poisson              # poisson (pre) | close_holes (pre_pre): mesh whose holes are filled
+  max_hole_edges: 200         # holes with more boundary edges are left open (keeps the scene border open)
+  density: 1.4142135623730951 # refinement alpha (Liepa sqrt(2)); higher = denser patch
+  fairing: 2                  # 2 = thin plate (bi-Laplacian, paper) | 1 = membrane (Laplacian) | 0 = flat, no fairing
+  max_refine_iters: 30        # cap on the split/relax rounds per hole
+
+mesh:                         # src/mesh/mesh.py (formats + scene of ONE chosen mesh)
+  enabled: true
+  input: close_holes          # close_holes (pre_pre) | poisson (pre) | liepa: mesh exported to PLY/OBJ/STL/OFF/GLB
+  frustum_cm: 20              # camera pyramid depth
+  frustum_every: 5            # draw 1 camera every N
+  trajectory_cm: 1.0          # trajectory tube diameter
+
+export:                       # src/export/meshlab.py (MeshLab project + filter script)
+  enabled: true
+  normals_k: 10               # neighbours for normals
+  normals_smooth_iter: 0
+  poisson_depth: 10           # Screened Poisson octree depth
+  poisson_samples_per_node: 1.5  # 1-5 clean cloud, 15-20 noisy cloud
+  poisson_point_weight: 4.0   # 0 = classic Poisson
+  isolated_diameter_frac: 0.1 # remove pieces with diameter < frac * bbox diagonal
+
+viewer:                       # src/viewer.py: main.py records the orbit; python3 view.py <this file> opens the window
+  enabled: true               # main.py records <run_dir>/videos/navigation_<cloud>_<seconds>s.mp4 (child process: a renderer crash only skips the video)
+  cloud: sparse               # sparse | patch_match | openmvs | mesh
+  seconds: 45
+  fps: 30
+  offscreen: auto             # auto = hidden Open3D window with a display, else OffscreenRenderer (EGL) | true | false
+  timeout_s: 1800             # kill the recording process after this many seconds
+  width: 1280
+  height: 720
+  frustum_cm: 20
+  point_size: 2.0
+  fov_deg: 60.0               # vertical FOV of the orbit camera
+  orbit_radius_factor: 1.5    # orbit radius = factor * robust half-diagonal of the scene
+  orbit_elevation_deg: 30.0
+  background: [1.0, 1.0, 1.0]
+
+videos:                       # src/videos.py
+  enabled: true
+  topdown_fps: 10             # fps of trajectory_topdown.mp4 (1 frame per camera)
+  kept_vs_discarded: true     # writes frames_kept_vs_discarded.mp4
+  width: 960                  # output width (height proportional, even)
+  codec: auto                 # auto = avc1 (H.264) if the OpenCV build can encode it, else mp4v | any cv2.VideoWriter fourcc
+
+evaluation:                   # src/evaluation
+  enabled: true
+  measured_cm: []             # [{name: room_width|room_length|ceiling_height, value_cm}] measured by hand
+  ablation_runs: []           # run ids to compare (configs/experiments/ablation.yaml)
+  loop_closed: null           # unknown for this video | false | true # dataset of this copy
+  hard_regions: true          # smooth vs textured wall reprojection (needs planes)
+  texture_radius_px: 30       # radius of local keypoint density
+  texture_split_quantile: 0.5 # texture quantile splitting smooth_wall / textured_wall
+  inlier_px: 2.0              # point is inlier if its mean reprojection error < inlier_px

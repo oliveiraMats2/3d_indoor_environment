@@ -45,3 +45,6 @@ results/
 
 # workspace of the parede_sala_GPU_<technique>.yaml runs (GPU SfM techniques)
 /parede_sala_GPU/
+
+# workspace of the kitchen_my_home_<technique>.yaml runs
+/kitchen_my_home/
