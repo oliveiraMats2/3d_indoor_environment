@@ -56,6 +56,7 @@ detection:                    # src/detectores.py
 
 report:                       # src/relatorio.py
   max_figures: 5
+  max_rows: 20
 
 filters:
   lowe_ratio: 0.75            # lower = cleaner and fewer matches; 0.7 to 0.8 is usual (also used by detection)
@@ -91,7 +92,8 @@ visualize:
     n_lines: 20
     dpi: 150
 
-evaluation:                   # src/evaluation (not implemented yet)
+evaluation:                   # src/evaluation; runs before the final report
   enabled: false
   measured_cm: []             # list of {name, value_cm} measured by hand at collection time
   ablation_runs: []           # run ids to compare
+  loop_closed: null           # true only when the capture ends at the starting point

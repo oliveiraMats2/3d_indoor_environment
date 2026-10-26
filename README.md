@@ -26,7 +26,7 @@ python main.py                       # uses config.yaml
 python main.py --config <file>.yaml  # any other config (run id = file name)
 ```
 
-Stages, in order: extraction, frame_quality, detection, matching, geometry, two_view, report.
+Stages, in order: extraction, frame_quality, detection, matching, geometry, two_view, optional evaluation, report.
 `opencv-contrib-python` is required (AKAZE lives in `cv2.xfeatures2d` on OpenCV 5).
 
 ## config.yaml
@@ -42,7 +42,7 @@ not included yet. Unknown keys are rejected (pydantic `extra="forbid"`).
 | `detection` | `methods` (sift, orb, akaze), `nfeatures`, timing `reps`/`warmup` |
 | `filters` | `lowe_ratio`, `min_matches` (pairs below it are unsuccessful) |
 | `matching` | `name` (brute_force, flann), `strategy` (sequential, all_pairs), timing reps, FLANN index params |
-| `report` | `max_figures` for the detection/matching report |
+| `report` | `max_figures` and `max_rows` for the generated `artifacts/<id>/report.md` |
 | `geometry.enabled` | run the geometry and two_view stages |
 | `geometry.ransac.method` | OpenCV robust method name, resolved as `cv2.<method>` (default `USAC_MAGSAC`) |
 | `geometry.ransac.threshold_px` | max distance (px) from a point to its epipolar line to count as inlier |
@@ -52,6 +52,10 @@ not included yet. Unknown keys are rejected (pydantic `extra="forbid"`).
 | `visualize.matches` | `max_lines`, `dpi`, `format` of the match figures |
 | `visualize.epilines.n_lines` | number of inliers sampled (seeded by `run.seed`) whose epipolar lines are drawn |
 | `visualize.epilines.dpi` | figure resolution; the side-by-side canvas is 12 in wide (150 dpi -> 1800 px) |
+| `evaluation.enabled` | run Stage 5 before the report; uses global SfM when present and otherwise evaluates the current two-view clouds |
+| `evaluation.measured_cm` | measured `room_width`, `room_length` and `ceiling_height` values used by metric error |
+| `evaluation.loop_closed` | whether the capture really returned to its starting point |
+| `evaluation.ablation_runs` | run ids whose evaluation CSVs are compared in `ablation.csv` |
 
 ## Outputs
 
@@ -81,3 +85,9 @@ not included yet. Unknown keys are rejected (pydantic `extra="forbid"`).
 | `cheirality_frac` | kept / triangulated points |
 
 Per-detector medians of these metrics go to `results/<id>/run.log`.
+
+When evaluation is enabled, Stage 5 writes numerical arrays under
+`results/<id>/evaluation/` and the following tables when their inputs are available:
+`artifacts/<id>/evaluation.csv`, `metric_error.csv`, `loop_drift.csv` and `ablation.csv`.
+The last pipeline stage always consolidates the available tables and figure paths in
+`artifacts/<id>/report.md`.

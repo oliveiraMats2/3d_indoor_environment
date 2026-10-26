@@ -64,5 +64,75 @@
 # ==============================================================================
 
 # >>> BEGIN IMPLEMENTATION >>>
+"""Build an ablation table from results already produced by independent YAML runs."""
+import csv
+import logging
+from pathlib import Path
+
+import numpy as np
+
+from src import stage_io
+
+log = logging.getLogger(__name__)
+
+COLUMNS = ["run_id", "detector", "reproj_mean_px", "reproj_median_px", "n_sparse",
+           "n_dense", "drift_pct", "metric_error_mean_rel"]
+NUMERIC = COLUMNS[2:]
+
+
+def _float(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _rows(run_id: str, artifacts_root: Path) -> list[dict]:
+    folder = artifacts_root / run_id
+    evaluation_rows = stage_io.read_csv(folder / "evaluation.csv") or [{}]
+    drift_rows = stage_io.read_csv(folder / "loop_drift.csv")
+    drift_by_detector = {row.get("detector", "global"): row for row in drift_rows}
+    relative = [_float(row.get("rel_error")) for row in stage_io.read_csv(folder / "metric_error.csv")]
+    relative = [value for value in relative if np.isfinite(value)]
+    relative_mean = float(np.mean(relative)) if relative else ""
+    rows = []
+    for evaluation in evaluation_rows:
+        detector = evaluation.get("detector", "global")
+        drift_row = drift_by_detector.get(detector, drift_by_detector.get("global", {}))
+        rows.append({
+            "run_id": run_id,
+            "detector": detector,
+            "reproj_mean_px": evaluation.get("reproj_mean_px", ""),
+            "reproj_median_px": evaluation.get("reproj_median_px", ""),
+            "n_sparse": evaluation.get("n_sparse", ""),
+            "n_dense": evaluation.get("n_dense", ""),
+            "drift_pct": drift_row.get("drift_pct", ""),
+            "metric_error_mean_rel": relative_mean,
+        })
+    return rows
+
+
+def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
+    run_ids = cfg["evaluation"].get("ablation_runs", [])
+    if not run_ids:
+        return None
+
+    artifacts = Path(artifacts_dir)
+    artifacts_root = artifacts.parent
+    rows = [row for run_id in run_ids for row in _rows(run_id, artifacts_root)]
+    csv_path = artifacts / "ablation.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(csv_path, "w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    out = Path(run_dir) / "evaluation"
+    out.mkdir(parents=True, exist_ok=True)
+    table = np.array([[_float(row[column]) for column in NUMERIC] for row in rows], dtype=np.float64)
+    np.save(out / "ablation.npy", table.reshape(len(rows), len(NUMERIC)))
+    np.save(out / "ablation_columns.npy", np.asarray(NUMERIC))
+    log.info("ablation: %d rows from %d runs", len(rows), len(run_ids))
+    return csv_path
 
 # <<< END IMPLEMENTATION <<<

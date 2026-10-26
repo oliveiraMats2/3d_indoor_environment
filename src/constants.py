@@ -48,7 +48,7 @@ class Detection(Strict):
     methods: list[Literal["sift", "orb", "akaze"]] = ["sift", "orb", "akaze"]
     nfeatures: int = 5000; reps: int = 30; warmup: int = 2
 
-class Report(Strict): max_figures: int = 5
+class Report(Strict): max_figures: int = 5; max_rows: int = 20
 class Filters(Strict): lowe_ratio: float = 0.75; min_matches: int = 10
 class FloatIndex(Strict): algorithm: int = 1; trees: int = 5
 class BinaryIndex(Strict): algorithm: int = 6; table_number: int = 6; key_size: int = 12; multi_probe_level: int = 1
@@ -69,8 +69,15 @@ class Geometry(Strict): enabled: bool = False; ransac: Ransac = Ransac(); intrin
 class MatchesViz(Strict): max_lines: int = 100; dpi: int = 150; format: str = "png"
 class EpilinesViz(Strict): n_lines: int = 20; dpi: int = 150
 class Visualize(Strict): matches: MatchesViz = MatchesViz(); epilines: EpilinesViz = EpilinesViz()
-class Measure(Strict): name: str; value_cm: float
-class Evaluation(Strict): enabled: bool = False; measured_cm: list[Measure] = []; ablation_runs: list[str] = []
+class Measure(Strict):
+    name: Literal["room_width", "room_length", "ceiling_height"]
+    value_cm: float
+
+class Evaluation(Strict):
+    enabled: bool = False
+    measured_cm: list[Measure] = []
+    ablation_runs: list[str] = []
+    loop_closed: Optional[bool] = None
 
 class Config(Strict):
     run: Run = Run(); extraction: Extraction = Extraction(); frame_quality: FrameQuality = FrameQuality()

@@ -18,9 +18,12 @@
 
 """SIFT x ORB x AKAZE tables and figures from the .npy files saved by detectores.py."""
 import csv, logging, os
+from pathlib import Path
 import cv2
 import numpy as np
 from tqdm import tqdm
+
+from src import stage_io
 
 COLS_DET = ["n_keypoints", "time_ms_mean", "time_ms_std", "time_per_kp_ms", "coverage_8x8",
             "entropy_8x8", "scale_p5", "scale_p95", "descriptor_bytes"]
@@ -256,3 +259,90 @@ def run(cfg: dict, run_dir: str, frames_dir: str, metrics_dir: str) -> None:
         print(f"{c:<26}" + cells)
 
     print(f"CSVs in {met}, figures in {fig}")
+
+    write_report(metrics_dir, run_dir, cfg.get("max_rows", 20), cfg["max_figures"])
+
+
+REPORT_CSVS = [
+    ("frame_quality_metrics.csv", "Qualidade dos quadros"),
+    ("detection_metrics.csv", "Detectores"),
+    ("matching_metrics.csv", "Emparelhamento"),
+    ("summary.csv", "Resumo dos detectores"),
+    ("epipolar_metrics.csv", "Geometria epipolar e triangulação"),
+    ("evaluation.csv", "Erro de reprojeção"),
+    ("metric_error.csv", "Erro métrico"),
+    ("loop_drift.csv", "Drift de fechamento do circuito"),
+    ("ablation.csv", "Estudo de ablação"),
+]
+FIGURE_GROUPS = ["keypoints", "matching", "registration", "epilines"]
+
+
+def _cell(value) -> str:
+    text = "" if value is None else str(value)
+    try:
+        number = float(text)
+        text = f"{number:.4g}" if np.isfinite(number) else text
+    except ValueError:
+        pass
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def _table(rows: list[dict], max_rows: int) -> list[str]:
+    if not rows:
+        return ["(CSV vazio)"]
+    columns = list(dict.fromkeys(key for row in rows for key in row))
+    lines = ["| " + " | ".join(_cell(column) for column in columns) + " |",
+             "|" + "---|" * len(columns)]
+    for row in rows[:max_rows]:
+        lines.append("| " + " | ".join(_cell(row.get(column, "")) for column in columns) + " |")
+    if len(rows) > max_rows:
+        lines.append(f"*Tabela limitada a {max_rows} de {len(rows)} linhas.*")
+    return lines
+
+
+def _relative(path: Path, base: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(base.resolve()))
+    except ValueError:
+        return str(path.resolve())
+
+
+def write_report(metrics_dir: str, run_dir: str, max_rows: int, max_figures: int) -> Path:
+    """Generate the final Markdown report after every pipeline/evaluation artifact exists."""
+
+    metrics, run = Path(metrics_dir), Path(run_dir)
+    workspace = run.resolve().parent.parent
+    lines = [f"# Relatório da execução `{run.name}`", "",
+             f"Resultados: `{_relative(run, workspace)}`  ",
+             f"Artefatos: `{_relative(metrics, workspace)}`", ""]
+
+    for filename, title in REPORT_CSVS:
+        path = metrics / filename
+        lines.extend([f"## {title}", ""])
+        if path.exists():
+            lines.extend(_table(stage_io.read_csv(path), max_rows))
+            lines.extend(["", f"Arquivo completo: `{_relative(path, workspace)}`"])
+        else:
+            lines.append("Não gerado nesta execução (estágio desabilitado ou entrada ainda indisponível).")
+        lines.append("")
+
+    lines.extend(["## Figuras", ""])
+    figures_root = run / "figures"
+    for group in FIGURE_GROUPS:
+        files = sorted(path for path in (figures_root / group).rglob("*") if path.is_file()) \
+            if (figures_root / group).is_dir() else []
+        lines.append(f"### {group}")
+        lines.append("")
+        if files:
+            lines.extend(f"- `{_relative(path, workspace)}`" for path in files[:max_figures])
+            if len(files) > max_figures:
+                lines.append(f"- … mais {len(files) - max_figures} arquivo(s)")
+        else:
+            lines.append("Nenhuma figura gerada.")
+        lines.append("")
+
+    report = metrics / "report.md"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    log.info("final report written to %s", report)
+    return report

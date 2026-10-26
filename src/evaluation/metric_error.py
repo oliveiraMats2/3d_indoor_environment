@@ -64,5 +64,70 @@
 # ==============================================================================
 
 # >>> BEGIN IMPLEMENTATION >>>
+"""Compare manually measured room dimensions with the reconstructed floor plan."""
+import csv
+import logging
+import math
+from pathlib import Path
+
+import numpy as np
+
+from src import stage_io
+
+log = logging.getLogger(__name__)
+
+MODEL_COLUMNS = {
+    "room_width": "width_cm",
+    "room_length": "length_cm",
+    "ceiling_height": "ceiling_height_cm",
+}
+FIELDS = ["name", "value_cm", "model_cm", "abs_error_cm", "rel_error"]
+
+
+def _number(row: dict, key: str) -> float:
+    try:
+        value = float(row.get(key, ""))
+    except (TypeError, ValueError):
+        return float("nan")
+    return value if math.isfinite(value) else float("nan")
+
+
+def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
+    if not cfg["evaluation"]["enabled"]:
+        return None
+
+    measures = [dict(item) for item in cfg["evaluation"].get("measured_cm", [])]
+    csv_path = Path(artifacts_dir) / "metric_error.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(run_dir) / "evaluation"
+    out.mkdir(parents=True, exist_ok=True)
+    floorplan_rows = stage_io.read_csv(Path(artifacts_dir) / "floorplan.csv")
+    floorplan = floorplan_rows[-1] if floorplan_rows else {}
+    if measures and not floorplan:
+        log.warning("metric_error: floorplan.csv unavailable; model measurements stay empty")
+
+    rows = []
+    errors = np.full((len(measures), 2), np.nan, dtype=np.float64)
+    for index, measure in enumerate(measures):
+        name = measure["name"]
+        real = float(measure["value_cm"])
+        model = _number(floorplan, MODEL_COLUMNS[name])
+        row = {"name": name, "value_cm": real, "model_cm": "", "abs_error_cm": "", "rel_error": ""}
+        if np.isfinite(model):
+            absolute = abs(model - real)
+            relative = absolute / real if real else float("nan")
+            errors[index] = absolute, relative
+            row.update(model_cm=model, abs_error_cm=absolute,
+                       rel_error=relative if np.isfinite(relative) else "")
+        rows.append(row)
+
+    with open(csv_path, "w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    np.save(out / "metric_errors.npy", errors)
+    if not measures:
+        log.warning("metric_error: evaluation.measured_cm is empty")
+    return csv_path
 
 # <<< END IMPLEMENTATION <<<

@@ -57,6 +57,7 @@ detection:                    # src/detectores.py
 
 report:                       # src/relatorio.py
   max_figures: 5
+  max_rows: 20
 
 filters:
   lowe_ratio: 0.75
@@ -91,3 +92,9 @@ visualize:
   epilines:
     n_lines: 20
     dpi: 150
+
+evaluation:                   # src/evaluation; report is always generated after it
+  enabled: false
+  measured_cm: []             # {name: room_width|room_length|ceiling_height, value_cm: ...}
+  ablation_runs: []
+  loop_closed: null           # true only when the capture ends at the starting point

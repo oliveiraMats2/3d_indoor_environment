@@ -24,7 +24,7 @@ import cv2
 import numpy as np
 import yaml
 
-from src import detectores, epipolar, extrair_quadros, frame_quality, matching, relatorio
+from src import detectores, epipolar, evaluation, extrair_quadros, frame_quality, matching, relatorio
 from src.constants import Config
 from src.epipolar import two_view
 from src.matching import metrics as matching_metrics
@@ -131,17 +131,11 @@ def main():
             run.seed,
         )
 
-    # report last: it rewrites matching_metrics.csv with the sampson_px column on top of the matching_metrics stage
+    stage("evaluation", evaluation.run, cfg.model_dump(), run_dir, artifacts_dir)
+
+    # Report stays last so it sees every CSV and figure produced by the pipeline.
     report_cfg = cfg.report.model_dump()
     stage("report", relatorio.run, report_cfg, run_dir, ext.output_dir, artifacts_dir)
-
-    # ponytail: evaluation is still a stub; replace the raise once implemented
-    stubs = (("evaluation", "src.evaluation"),)
-    for block, package in stubs:
-
-        block_cfg = getattr(cfg, block)
-        if block_cfg.enabled:
-            raise NotImplementedError(f"{block}.enabled is true but {package} is not implemented yet")
 
 if __name__ == "__main__":
     main()
