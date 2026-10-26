@@ -51,7 +51,9 @@
 #   image_names.npy (fallback sfm/centers.npy with WARNING).
 #   Outputs under results/<run_id>/evaluation/: centers.npy (N, 3), video order.
 #   One row in artifacts/<run_id>/loop_drift.csv: delta_cm, trajectory_cm,
-#   drift_pct, delta_model, trajectory_model, loop_closed.
+#   drift_pct, delta_model, trajectory_model, loop_closed, scale_source. Without a metric scale
+#   (scale/scale.npy) the cm columns use the room_fill outline fit (artifacts room_fill.csv
+#   cm_per_model_unit, scale_source room_fill); with neither they stay empty.
 #
 # Defaults (read from the YAML block evaluation, never hardcoded):
 #   enabled: false
@@ -111,6 +113,15 @@ def drift(centers: np.ndarray) -> tuple[float, float, float]:
 
     return delta, trajectory, pct
 
+def room_fill_scale(artifacts_dir: Path) -> float:
+    """cm per model unit fitted by room_fill (last row of room_fill.csv), nan when absent."""
+
+    rows = stage_io.read_csv(artifacts_dir / "room_fill.csv") if (artifacts_dir / "room_fill.csv").exists() else []
+    try:
+        return float(rows[-1]["cm_per_model_unit"]) if rows else float("nan")
+    except (KeyError, ValueError):
+        return float("nan")
+
 def run(cfg: dict, run_dir: str, artifacts_dir: str) -> dict | None:
 
     ev = cfg["evaluation"]
@@ -130,8 +141,12 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> dict | None:
 
     _, unit = stage_io.scale_info(run_dir)
     delta, trajectory, pct = drift(centers)
-    if unit != "cm":
+    to_cm, scale_source = (1.0, "scale") if unit == "cm" else (room_fill_scale(Path(artifacts_dir)), "room_fill")
+    if not np.isfinite(to_cm):
+        to_cm, scale_source = float("nan"), ""
         log.warning("scale unknown: delta_cm and trajectory_cm left empty (drift_pct is scale-free)")
+    elif scale_source == "room_fill":
+        log.info("loop drift in cm from the room_fill outline fit (%.4g cm per model unit)", to_cm)
 
     loop_closed = ev.get("loop_closed")
     if loop_closed is None:
@@ -140,12 +155,13 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> dict | None:
         log.warning("loop not closed: drift measures start-end distance, not drift")
 
     row = {
-        "delta_cm": round(delta, 4) if unit == "cm" else "",
-        "trajectory_cm": round(trajectory, 4) if unit == "cm" else "",
+        "delta_cm": round(delta * to_cm, 4) if scale_source else "",
+        "trajectory_cm": round(trajectory * to_cm, 4) if scale_source else "",
         "drift_pct": round(pct, 4),
         "delta_model": round(delta, 6),
         "trajectory_model": round(trajectory, 6),
         "loop_closed": "" if loop_closed is None else str(bool(loop_closed)).lower(),
+        "scale_source": scale_source,  # scale (ArUco / manual) | room_fill (hand-measured outline) | "" unknown
     }
     stage_io.log_metrics(log, row)
     stage_io.upsert_csv(Path(artifacts_dir) / "loop_drift.csv", row)
@@ -178,7 +194,7 @@ if __name__ == "__main__":
         assert np.allclose(np.load(rd / "evaluation" / "centers.npy"), pts)
         csv_row = stage_io.read_csv(ad / "loop_drift.csv")[0]
         assert list(csv_row) == ["delta_cm", "trajectory_cm", "drift_pct", "delta_model", "trajectory_model",
-                                 "loop_closed"]
+                                 "loop_closed", "scale_source"]
 
         (rd / "scale" / "scale.npy").unlink()
         cfg["evaluation"]["loop_closed"] = None
@@ -186,6 +202,11 @@ if __name__ == "__main__":
         assert row["delta_cm"] == "" and row["trajectory_cm"] == "" and row["loop_closed"] == ""
         assert abs(row["delta_model"] - 10.0) < 1e-6 and abs(row["drift_pct"] - 100 * 10 / expected_traj) < 1e-3
         assert stage_io.read_csv(ad / "loop_drift.csv")[0]["delta_cm"] == ""
+
+        stage_io.upsert_csv(ad / "room_fill.csv", {"cm_per_model_unit": 3.0})
+        row = run(cfg, str(rd), str(ad))
+        assert row["scale_source"] == "room_fill" and abs(row["delta_cm"] - 30.0) < 1e-6
+        (ad / "room_fill.csv").unlink()
 
         cfg["evaluation"]["loop_closed"] = False
         assert run(cfg, str(rd), str(ad))["loop_closed"] == "false"
