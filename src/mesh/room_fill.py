@@ -347,14 +347,15 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         log.info("room_fill: planes labels belong to another cloud (%d vs %d points), not used", len(labels), len(points))
         labels = None
 
-    # 1. wall points: planes labels, else the 20-80 % height band
+    # 1. wall points: planes labels, else the room_fill.wall_band fraction of the height range
     z_lo, z_hi = np.percentile(pf[:, 2], [1, 99])
     wall_mask, wall_from = None, "labels"
     if labels is not None and (labels >= 2).sum() >= MIN_WALL_POINTS:
         wall_mask = labels >= 2
     else:
         wall_from = "height_band"
-        wall_mask = (pf[:, 2] > z_lo + 0.2 * (z_hi - z_lo)) & (pf[:, 2] < z_lo + 0.8 * (z_hi - z_lo))
+        b_lo, b_hi = rcfg.get("wall_band", [0.2, 0.8])
+        wall_mask = (pf[:, 2] > z_lo + b_lo * (z_hi - z_lo)) & (pf[:, 2] < z_lo + b_hi * (z_hi - z_lo))
     q = pf[wall_mask, :2]
     if len(q) < 10:
         log.warning("room_fill: only %d wall points, outline fit impossible, stage skipped", len(q))

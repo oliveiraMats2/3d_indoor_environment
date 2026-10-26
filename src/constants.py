@@ -191,6 +191,7 @@ class RoomFill(Strict):  # src/mesh/room_fill.py
     surfaces: list[Literal["floor", "ceiling", "walls"]] = ["floor", "ceiling"]
     source: Literal["sparse", "patch_match", "openmvs"] = "patch_match"
     grid_cm: float = 5.0; max_gap_cm: float = 5.0; fit_rotations: int = 72
+    wall_band: Annotated[list[float], Field(min_length=2, max_length=2)] = [0.2, 0.8]  # height fractions of the fit points
 
 class Mesh(Strict):
     enabled: bool = True; input: Literal["close_holes", "poisson", "liepa"] = "close_holes"

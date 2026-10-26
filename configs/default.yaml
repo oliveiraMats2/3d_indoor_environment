@@ -289,6 +289,7 @@ room_fill:                    # src/mesh/room_fill.py: flat floor/ceiling (walls
   grid_cm: 5.0                # side of the fill grid cells
   max_gap_cm: 5.0             # a cell closer than this to the reconstruction is already covered (not filled)
   fit_rotations: 72           # initial rotations tried by the outline fit
+  wall_band: [0.2, 0.8]       # fit points when planes labels are unusable: fraction of the height range (floor 0 -> ceiling 1)
 
 mesh:                         # src/mesh/mesh.py (formats + scene of ONE chosen mesh)
   enabled: true

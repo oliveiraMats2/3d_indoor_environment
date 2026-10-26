@@ -304,6 +304,7 @@ room_fill:                    # src/mesh/room_fill.py: flat floor/ceiling (walls
   grid_cm: 5.0                # side of the fill grid cells
   max_gap_cm: 5.0             # a cell closer than this to the reconstruction is already covered (not filled)
   fit_rotations: 72           # initial rotations tried by the outline fit
+  wall_band: [0.80, 0.97]     # dataset of this copy: outline measured along the ceiling molding -> fit on the band right below the ceiling, above the furniture
 
 mesh:                         # src/mesh/mesh.py (formats + scene of ONE chosen mesh)
   enabled: true
