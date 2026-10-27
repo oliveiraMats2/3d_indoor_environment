@@ -1,0 +1,100 @@
+# Etapa 3 parte 2 config (partial): only the stages implemented so far (extraction to two-view geometry).
+# Every key is validated by main.py and unknown keys are rejected.
+# Run: python main.py   (or: python main.py --config config.yaml)
+
+run:
+  id: null                    # null = this file's name; outputs go to results/<id>/ and artifacts/<id>/
+  output_root: results
+  artifacts_root: artifacts
+  seed: 42
+  log_level: INFO
+  overwrite: false
+  cache: true
+
+extraction:                   # src/extrair_quadros.py
+  rerun: false                # true = extract again (old frames deleted); false = reuse if selecao.csv exists
+  video: 3d_image_video.MOV
+  output_dir: frames          # shared by all experiments, gitignored
+  min_frames: 100
+  max_frames: 300
+  overlap: 0.70               # initial overlap target
+  overlap_min: 0.60
+  overlap_max: 0.80
+  overlap_step: 0.025
+  max_adjust_iters: 12
+  stride: 2                   # analyze 1 of every N video frames
+  analysis_width: 640
+  nfeatures: 1000             # ORB features used only to estimate overlap
+  lowe_ratio: 0.75
+  min_good_matches: 15
+  ransac_threshold_px: 3.0
+  min_inliers: 12
+  sharp_percentile: 25        # drop the blurriest 25% of sampled frames
+  max_width: 1920
+  image_format: png
+  jpeg_quality: 95
+
+frame_quality:                # src/frame_quality.py
+  resize_width: 640
+  blur:
+    laplacian_var_min: 100.0
+    relative_to_median: 0.5
+  exposure:
+    mean_min: 40
+    mean_max: 215
+    clipped_max_frac: 0.05    # fraction of pixels <= 5 or >= 250
+  contrast:
+    std_min: 20.0
+  texture:
+    min_keypoints: 300
+    fast_threshold: 20
+
+detection:                    # src/detectores.py
+  methods: [sift, orb, akaze]
+  nfeatures: 5000
+  reps: 30
+  warmup: 2
+
+report:                       # src/relatorio.py
+  max_figures: 5
+  max_rows: 20
+
+filters:
+  lowe_ratio: 0.75
+  min_matches: 10             # pairs below it are success=False
+
+matching:                     # src/matching
+  enabled: true
+  name: brute_force           # brute_force | flann
+  strategy: sequential        # sequential | all_pairs
+  cross_check: false          # must stay false (knnMatch k=2 for Lowe)
+  reps: 30
+  warmup: 2
+  flann:
+    checks: 50
+    float_index: {algorithm: 1, trees: 5}                                          # KDTREE
+    binary_index: {algorithm: 6, table_number: 6, key_size: 12, multi_probe_level: 1}  # LSH
+
+geometry:                     # src/epipolar: F/E (geometry stage) and pose, epilines, triangulation (two_view stage)
+  enabled: true
+  ransac:
+    method: USAC_MAGSAC
+    threshold_px: 1.0
+    confidence: 0.999
+    max_iters: 5000
+  intrinsics: {fx: null, fy: null, cx: null, cy: null}   # null fx/fy -> max(w, h); null cx/cy -> w/2, h/2
+
+visualize:
+  matches:
+    max_lines: 100
+    dpi: 150
+    format: png
+  epilines:
+    n_lines: 20
+    dpi: 150
+
+evaluation:                   # src/evaluation; report is always generated after it
+  enabled: false
+  measured_cm: []             # {name: room_width|room_length|ceiling_height, value_cm: ...}
+  ablation_runs: []
+  loop_closed: null           # true only when the capture ends at the starting point
