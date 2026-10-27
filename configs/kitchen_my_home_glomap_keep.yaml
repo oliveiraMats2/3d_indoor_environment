@@ -210,7 +210,7 @@ cleanup:                      # src/cloud/clean.py (sparse and each dense method
   nb_neighbors: 20            # statistical outlier removal neighbours
   std_ratio: 100.0            # keep run: statistical outlier removal off in practice
   crop_percentiles: [0, 100]  # keep run: no crop
-  device: auto                # auto = CUDA:0 when Open3D sees a CUDA GPU, else CPU:0 | CPU:0 | CUDA:0
+  device: CPU:0               # dataset of this copy: CPU keeps the GPU free for Gaussian Splatting (Open3D holds ~2.4 GB otherwise)
 
 planes:                       # src/cloud/planes.py
   enabled: true
