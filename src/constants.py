@@ -118,6 +118,7 @@ class Sfm(Strict):
     ba_use_gpu: bool = False; max_image_size: int = 1920; max_num_features: int = 8192
     min_num_matches: int = 15; multiple_models: bool = True
     ba_global_max_num_iterations: Optional[int] = None; ba_global_max_refinements: Optional[int] = None
+    max_camera_spread: Optional[float] = 5.0  # cameras farther than this x p95 of the centre spread are dropped; None = off
     ba_global_frames_ratio: Optional[float] = None  # None = COLMAP 1.1; 1.3 = fewer global BAs (incremental only)
     project_quality: Literal["low", "medium", "high", "extreme"] = "high"
     link_images: Literal["auto", "hardlink", "symlink", "copy"] = "auto"  # how exports/colmap/images/ holds the frames

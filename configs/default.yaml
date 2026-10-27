@@ -132,6 +132,7 @@ sfm:                          # src/sfm/colmap.py + convert.py (COLMAP >= 4.0 CL
   multiple_models: true       # allow several submodels; the largest goes to sparse/0
   ba_global_max_num_iterations: null  # null = COLMAP default (incremental only)
   ba_global_max_refinements: null     # null = COLMAP default (incremental only)
+  max_camera_spread: 5.0             # cameras farther than this x p95 of the centre spread are deregistered (lone far frame); null = off
   ba_global_frames_ratio: null        # null = COLMAP 1.1; 1.3 = fewer global BAs, ~30-50% faster (incremental only)
   project_quality: high       # project_generator --quality: low|medium|high|extreme
   link_images: auto           # exports/colmap/images/: auto = hardlink, copy if refused | hardlink | symlink (relative) | copy

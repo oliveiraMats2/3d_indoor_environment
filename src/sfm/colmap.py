@@ -27,7 +27,8 @@
 #         fixed_dist [k1,k2,p1,p2], matcher (sequential|exhaustive), sequential_overlap, loop_detection,
 #         vocab_tree, mapper (incremental|global), use_gpu, gpu_index, ba_use_gpu, max_image_size,
 #         max_num_features, min_num_matches, multiple_models, ba_global_max_num_iterations,
-#         ba_global_max_refinements, ba_global_frames_ratio, project_quality, backend (auto|cli|pycolmap)}.
+#         ba_global_max_refinements, ba_global_frames_ratio, max_camera_spread (lone far cameras deregistered after
+#         the mapper and on reuse), project_quality, backend (auto|cli|pycolmap)}.
 # Backend: the COLMAP CLI below is the primary path. backend(cfg) picks it whenever sfm.colmap_bin is a
 #         COLMAP >= 4.0 (auto); pycolmap (src/sfm/pycolmap_backend.py, same outputs and CSV columns) only
 #         when the binary is missing or with sfm.backend: pycolmap.
@@ -49,6 +50,7 @@ import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from src import stage_io
 
@@ -345,6 +347,36 @@ def _run(cmd: list[str], log_path: Path) -> float:
 
     return dt
 
+def drop_far_cameras(model: Path, ratio: float | None) -> list[str]:
+    """Deregisters the cameras whose centre is farther than ratio x the 95th percentile of the centre
+    distances to the median centre (a lone frame registered far away inflates the scene extent of Gaussian
+    Splatting and the trajectory length); rewrites model/*.bin; returns the image names dropped."""
+
+    if not ratio:
+        return []
+    try:
+        import pycolmap
+    except ImportError:
+        log.warning("sfm: pycolmap missing, sfm.max_camera_spread not applied")
+        return []
+
+    rec = pycolmap.Reconstruction(str(model))
+    images = [im for im in rec.images.values() if im.has_pose]
+    if len(images) < 10:
+        return []
+    centers = np.array([im.projection_center() for im in images])
+    dist = np.linalg.norm(centers - np.median(centers, axis=0), axis=1)
+    limit = float(ratio) * float(np.percentile(dist, 95))
+    far = [im for im, d in zip(images, dist) if d > limit]
+    for im in far:
+        rec.deregister_frame(im.frame_id)
+    if far:
+        rec.write(str(model))
+        log.warning("sfm: %d camera(s) farther than %.3g x p95 of the centre spread deregistered: %s", len(far),
+                    ratio, ", ".join(sorted(im.name for im in far)))
+
+    return [im.name for im in far]
+
 def export_model(scfg: dict, ws: Path, model: Path, cam_params: list[float] | None) -> None:
     """TXT next to the .bin, sparse.ply, project.ini with paths RELATIVE to exports/colmap/ (portable:
     open it with `cd exports/colmap && colmap gui --project_path project.ini`)."""
@@ -415,7 +447,9 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
 
     if not scfg["rerun"] and (model / "images.bin").exists():
         log.info("sfm: reusing existing model %s (%d images; sfm.rerun=false)", model, count_registered(model))
-        if not (ws / "sparse.ply").exists() or not (ws / "project.ini").exists() or not (model / "images.txt").exists():
+        dropped = drop_far_cameras(model, scfg.get("max_camera_spread"))
+        if dropped or not (ws / "sparse.ply").exists() or not (ws / "project.ini").exists() \
+                or not (model / "images.txt").exists():
             try:
                 export_model(scfg, ws, model, cam_params)
             except subprocess.CalledProcessError:
@@ -458,6 +492,7 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
                                               "matcher": scfg["matcher"], "mapper": scfg["mapper"]})
         return None
 
+    n_reg -= len(drop_far_cameras(best, scfg.get("max_camera_spread")))
     try:
         export_model(scfg, ws, best, cam_params)
     except subprocess.CalledProcessError:
@@ -468,7 +503,7 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
 
     return best
 
-DEFAULTS = {"enabled": True, "rerun": False, "colmap_bin": "colmap", "camera_model": "OPENCV",
+DEFAULTS = {"enabled": True, "rerun": False, "max_camera_spread": 5.0, "colmap_bin": "colmap", "camera_model": "OPENCV",
             "single_camera": True, "intrinsics": "estimate", "fixed_dist": [0.0, 0.0, 0.0, 0.0],
             "matcher": "sequential", "sequential_overlap": 10, "loop_detection": False, "vocab_tree": None,
             "mapper": "incremental", "use_gpu": "auto", "gpu_index": "0", "ba_use_gpu": False,
