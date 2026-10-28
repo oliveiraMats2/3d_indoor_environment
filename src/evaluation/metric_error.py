@@ -41,8 +41,8 @@
 #   (near-parallel neighbour or neighbour without points) the p2-p98 extent along the line (method extent).
 #   model_extent_cm (always the p2-p98 extent) is a diagnostic: it is short where corners are occluded.
 # - Scale (cm per working unit), in order: scale/scale.npy known (working unit = cm, k = 1, source scale)
-#   > leave-one-out: for each wall, k from the OTHER matched walls, k = sum(L_j u_j) / sum(u_j^2)
-#   (least squares through the origin), source leave_one_out, held_out true. The room_fill scale is fitted
+#   > leave-one-out: for each wall, k from the OTHER matched walls measured corner to corner, k = median(L_j / u_j)
+#   (robust to one badly reconstructed wall), source leave_one_out, held_out true. The room_fill scale is fitted
 #   on these same walls, so it is never used. With scale.npy from a measurement-based method (scale.method
 #   outline/room_fill/measurements) held_out is false (WARNING); metric_scale forces one source.
 # - Ceiling: planes ceiling plane at the floor frame origin, else p99 z of the points inside the outline;
@@ -210,11 +210,12 @@ def ceiling_units(run_dir: Path, geo: dict | None) -> tuple[float, str]:
     return float("nan"), ""
 
 def scale_from(L: np.ndarray, u: np.ndarray) -> float:
-    """cm per unit, least squares through the origin; NaN without data."""
+    """cm per unit, median of the per-wall ratios L/u (one badly reconstructed wall cannot drag the others);
+    NaN without data."""
 
     ok = np.isfinite(L) & np.isfinite(u) & (u > 0)
 
-    return float(np.sum(L[ok] * u[ok]) / np.sum(u[ok] ** 2)) if ok.sum() else float("nan")
+    return float(np.median(L[ok] / u[ok])) if ok.sum() else float("nan")
 
 def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
 
@@ -274,6 +275,8 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
                 log.warning("metric_error: wall %s (%.1f cm) matches no room_fill outline edge", m["name"], m["value_cm"])
 
     names = [m["name"] for m in walls if m["name"] in u and np.isfinite(u[m["name"]][0])]
+    corner = [n for n in names if u[n][1] == "corners"]  # both ends found: the extent fallback is not a length
+    names = corner if len(corner) >= 2 else names
     Lw = {m["name"]: m["value_cm"] for m in walls}
     k_all = 1.0 if metric else scale_from(np.array([Lw[n] for n in names]), np.array([u[n][0] for n in names]))
     for name in u:

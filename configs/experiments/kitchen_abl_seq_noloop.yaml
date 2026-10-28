@@ -355,6 +355,8 @@ evaluation:                   # src/evaluation
   measured_cm:                # ablation: tape measures of kitchen_my_home/medidas/medidas.yaml (bounding box of the outline)
     - {name: room_width, value_cm: 273.0}   # window wall
     - {name: room_length, value_cm: 429.0}  # sink/stove wall
+  measurements_file: configs/measurements/kitchen_my_home.yaml  # ablation: tape wall lengths
+  metric_scale: leave_one_out  # ablation: each wall scaled by the other walls (not circular)
   ablation_runs: []           # run ids to compare (configs/experiments/ablation.yaml)
   loop_closed: true           # ablation: the walk ends where it started (room protocol, loop closed)
   hard_regions: false         # ablation: not part of the table | smooth vs textured wall reprojection (needs planes)
