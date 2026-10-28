@@ -3,7 +3,7 @@
 #   axis     : evaluation.ablation_runs
 #   variant  : [kitchen_abl_seq_loop, kitchen_abl_seq_noloop, kitchen_abl_exhaustive, kitchen_abl_frames_200, kitchen_abl_frames_100]
 #   output   : kitchen_my_home/artifacts/kitchen_ablation/ablation.csv, kitchen_my_home/results/kitchen_ablation/evaluation/ablation*.npy
-#   frames   : kitchen_my_home/frames/overlap300/ (reused from the variants; detection on 10 of them)
+#   frames   : kitchen_my_home/frames/overlap300_v2/ (reused from the variants; detection on 10 of them)
 #   run      : AFTER the five variants: .venv-gpu/bin/python main.py kitchen_ablation.yaml
 #   flow     : cpu; T2 ablation 5.A.3: exhaustive x sequential (with/without loop detection) on the same
 #              300 frames, and 100/200/300 frames (300 = kitchen_abl_seq_loop). Reads only the variants' CSVs.
@@ -32,7 +32,7 @@ run:
 extraction:                   # src/extrair_quadros.py
   rerun: false                # true = extract again (old img_* and selecao.csv in output_dir are deleted); false = reuse frames if selecao.csv exists
   video: kitchen_my_home.MOV  # dataset of this copy
-  output_dir: kitchen_my_home/frames/overlap300  # ablation: shared by every kitchen_abl_* run with 300 frames (extracted once)
+  output_dir: kitchen_my_home/frames/overlap300_v2  # ablation: shared by every kitchen_abl_* run with 300 frames (extracted once)
   tag: null                   # null = SHA-1[:8] of this block without rerun/tag/output_dir (same params -> same frames)
   selection: overlap          # ablation: 60-80% overlap selection (R1) | all = every stride-th frame, dropped only by extraction.blur (overlap/sharp_percentile ignored) | overlap = greedy overlap selection
   min_frames: 270             # ablation: band [270, 300] | all: only warns below it | overlap: lower bound of the target adjustment

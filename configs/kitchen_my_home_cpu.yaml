@@ -3,7 +3,7 @@
 #   flow     : cpu = COLMAP SIFT + incremental mapper, Ceres BA on the CPU; dense PatchMatch only (light)
 #   dataset  : kitchen_my_home.MOV (iPhone, 13097 frames, 436.6 s, 30 fps, landscape 3840x2160 -> frames 1920x1080)
 #   output   : kitchen_my_home/results/kitchen_my_home_cpu/, kitchen_my_home/artifacts/kitchen_my_home_cpu/
-#   frames   : kitchen_my_home/frames/overlap300/ (T2 R1: 60-80% overlap selection, at most 300 frames; shared
+#   frames   : kitchen_my_home/frames/overlap300_v2/ (T2 R1: 60-80% overlap selection, at most 300 frames; shared
 #              with the kitchen_abl_* ablation)
 #   scale    : tape-measured outline (configs/measurements/kitchen_my_home.yaml) fitted to the sparse walls
 #   run      : ./run.sh kitchen_my_home_cpu.yaml
@@ -29,7 +29,7 @@ run:
 extraction:                   # src/extrair_quadros.py
   rerun: false                # true = extract again (old img_* and selecao.csv in output_dir are deleted); false = reuse frames if selecao.csv exists
   video: kitchen_my_home.MOV  # dataset of this copy
-  output_dir: kitchen_my_home/frames/overlap300  # flow of this copy: shared with the kitchen_abl_* runs (300 frames)
+  output_dir: kitchen_my_home/frames/overlap300_v2  # flow of this copy: shared with the kitchen_abl_* runs (300 frames)
   tag: null                   # null = SHA-1[:8] of this block without rerun/tag/output_dir (same params -> same frames)
   selection: overlap  # flow of this copy (R1 60-80%)             # all = every stride-th frame, dropped only by extraction.blur (overlap/sharp_percentile ignored) | overlap = greedy overlap selection
   min_frames: 270  # flow of this copy            # all: only warns below it | overlap: lower bound of the target adjustment

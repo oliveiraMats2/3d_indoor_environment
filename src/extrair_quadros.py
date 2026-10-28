@@ -60,15 +60,17 @@ def run(cfg: dict) -> list[str]:
     dropped = {i: r for i, r, d in zip(idx, why, drop) if d}
     n_sampled = len(idx)
 
-    ok = (np.array(nitidez) >= np.percentile(nitidez, cfg["sharp_percentile"])) & ~drop
-    idx = [i for i, o in zip(idx, ok) if o]
-    feats = [f for f, o in zip(feats, ok) if o]
-    log.info("%d candidatos nitidos de %d analisados (%.1f fps); blur %d, motion %d, %s", len(idx), n_sampled,
-             fps, why.count("blur"), why.count("motion"),
+    # sharp_percentile only ranks candidates: a global cut removes whole low-texture stretches (plain walls have
+    # low lapvar without being blurred) and left 0-overlap jumps; soft frames are kept only to bridge such gaps
+    sharp = (np.array(nitidez) >= np.percentile(nitidez, cfg["sharp_percentile"]))[~drop]
+    idx = [i for i, d in zip(idx, drop) if not d]
+    feats = [f for f, d in zip(feats, drop) if not d]
+    log.info("%d candidatos (%d nitidos) de %d analisados (%.1f fps); blur %d, motion %d, %s", len(idx), sharp.sum(),
+             n_sampled, fps, why.count("blur"), why.count("motion"),
              "mantidos so para SfM" if bcfg["keep_for_sfm_only"] else "descartados")
 
     sobreposicao = Sobreposicao(feats, (w, h), cfg)
-    kept, alvo = adjust(len(idx), sobreposicao, cfg)
+    kept, alvo = adjust(len(idx), sobreposicao, cfg, sharp)
     log.info("alvo final = %.3f -> %d quadros", alvo, len(kept))
 
     if len(kept) > cfg["max_frames"]:
@@ -95,17 +97,29 @@ def run(cfg: dict) -> list[str]:
                       int(i in nomes)] for i in sorted(linhas)])
     blur.write_mvs_exclude(cfg["output_dir"], [n for i, n in nomes.items() if info[i][2]])
 
-    ov = np.array(consecutive_overlap(kept, sobreposicao))
-    in_range = (ov >= cfg["overlap_min"]) & (ov <= cfg["overlap_max"])
     metrics = {"selection": "overlap", "n_sampled": n_sampled, "n_blur_drop": why.count("blur"), "n_motion_drop": why.count("motion"),
-               "n_selected": len(nomes), "n_mvs_exclude": sum(1 for i in nomes if info[i][2]),
-               "overlap_mean": round(float(ov.mean()), 4) if len(ov) else "",
-               "overlap_min": round(float(ov.min()), 4) if len(ov) else "",
-               "overlap_in_range_frac": round(float(in_range.mean()), 4) if len(ov) else ""}
+               "n_selected": len(nomes), "n_soft": int((~sharp[kept]).sum()), "n_mvs_exclude": sum(1 for i in nomes if info[i][2]),
+               **overlap_metrics(kept, sobreposicao, cfg)}
     stage_io.upsert_csv(os.path.join(cfg["output_dir"], "extraction_metrics.csv"), metrics)
     stage_io.log_metrics(log, metrics)
 
     return sorted(os.path.join(cfg["output_dir"], n) for n in nomes.values())
+
+
+def overlap_metrics(kept, sobreposicao, cfg) -> dict:
+    """Consecutive-pair overlap stats. overlap_* count failed estimates as 0 (as before); *_est use only the
+    pairs with a geometric estimate; n_overlap_failed = pairs where ORB/RANSAC gave no homography
+    (textureless frames or a true jump: unknown, not a measured 0)."""
+
+    ov = np.array(consecutive_overlap(kept, sobreposicao))
+    ok = np.array([p not in sobreposicao.failed for p in zip(kept[:-1], kept[1:])], bool)
+    in_range = (ov >= cfg["overlap_min"]) & (ov <= cfg["overlap_max"])
+    r = lambda x: round(float(x), 4)
+
+    return {"overlap_mean": r(ov.mean()) if len(ov) else "", "overlap_min": r(ov.min()) if len(ov) else "",
+            "overlap_in_range_frac": r(in_range.mean()) if len(ov) else "", "n_overlap_failed": int((~ok).sum()),
+            "overlap_min_est": r(ov[ok].min()) if ok.any() else "",
+            "overlap_in_range_frac_est": r(in_range[ok].mean()) if ok.any() else ""}
 
 
 def run_all(cfg: dict) -> list[str]:
@@ -168,14 +182,10 @@ def run_all(cfg: dict) -> list[str]:
     blur.write_mvs_exclude(out, [n for i, n in nomes.items() if info[i][2]])
 
     sobreposicao = Sobreposicao(feats, (w, h), cfg)
-    ov = np.array(consecutive_overlap(pos, sobreposicao))
-    in_range = (ov >= cfg["overlap_min"]) & (ov <= cfg["overlap_max"])
     metrics = {"selection": "all", "n_sampled": n_sampled, "n_blur_drop": why.count("blur"),
                "n_motion_drop": why.count("motion"), "n_selected": len(nomes),
                "n_mvs_exclude": sum(1 for i in nomes if info[i][2]),
-               "overlap_mean": round(float(ov.mean()), 4) if len(ov) else "",
-               "overlap_min": round(float(ov.min()), 4) if len(ov) else "",
-               "overlap_in_range_frac": round(float(in_range.mean()), 4) if len(ov) else ""}
+               **overlap_metrics(pos, sobreposicao, cfg)}
     stage_io.upsert_csv(os.path.join(out, "extraction_metrics.csv"), metrics)
     stage_io.log_metrics(log, metrics)
 

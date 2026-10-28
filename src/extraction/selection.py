@@ -19,27 +19,43 @@
 import numpy as np
 from tqdm import tqdm
 
-def selecionar(n, overlap, target):
+def selecionar(n, overlap, target, band=None, sharp=None):
+    """Greedy: from the last kept frame, advance while overlap >= target; on the first drop below it,
+    keep the best of (last sharp frame >= target, last frame >= target, current frame): inside band first,
+    then sharp, then closest to target. No sharp mask = every frame sharp; no band = (target, target)."""
 
-    kept, last, prev = [0], 0, 0
-    indices = range(1, n)
-    progress = tqdm(indices, desc=f"selection (target {target:.3f})", unit="frame", leave=False)
+    lo, hi = band or (target, target)
+    sharp = np.ones(n, bool) if sharp is None else np.asarray(sharp, bool)
+    failed = getattr(overlap, "failed", set())  # pairs without an estimate (Sobreposicao.failed)
+    kept, last, prev, prev_any = [0], 0, None, None
+    progress = tqdm(range(1, n), desc=f"selection (target {target:.3f})", unit="frame", leave=False)
     for j in progress:
 
-        score = overlap(last, j)
-        if score < target:
-            new = prev if prev != last else j
-            kept.append(new)
-            last = new
+        while overlap(last, j) < target:
+            if (last, j) in failed and prev_any is None and overlap(j - 1, j) == 0 and (j - 1, j) in failed:
+                break  # j inside a textureless stretch (no estimate even vs j-1): skip it instead of keeping a blind 0
 
-        prev = j
+            def rank(c):
+                o = overlap(last, c)
+                return max(lo - o, o - hi, 0.0), not sharp[c], abs(o - target)
+
+            new = min({c for c in (prev, prev_any, j) if c is not None}, key=rank)
+            kept.append(new)
+            last, prev, prev_any = new, None, None
+            if new == j:
+                break
+
+        if last != j and (last, j) not in failed:
+            prev_any = j
+            prev = j if sharp[j] else prev
 
     return kept
 
-def adjust(n, overlap, cfg):
+def adjust(n, overlap, cfg, sharp=None):
     """Step the target by overlap_step until the count is in [min_frames, max_frames]."""
     target = cfg["overlap"]
-    kept = selecionar(n, overlap, target)
+    band = (cfg["overlap_min"], cfg["overlap_max"])
+    kept = selecionar(n, overlap, target, band, sharp)
 
     for _ in range(cfg["max_adjust_iters"]):
 
@@ -52,7 +68,7 @@ def adjust(n, overlap, cfg):
             break
 
         target += step
-        kept = selecionar(n, overlap, target)
+        kept = selecionar(n, overlap, target, band, sharp)
 
     return kept, target
 

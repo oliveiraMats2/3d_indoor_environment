@@ -3,7 +3,7 @@
 #   axis     : sfm.matcher
 #   variant  : sequential
 #   output   : kitchen_my_home/results/kitchen_abl_seq_noloop/, kitchen_my_home/artifacts/kitchen_abl_seq_noloop/
-#   frames   : kitchen_my_home/frames/overlap300/ (overlap selection, stride 6, at most 300 frames)
+#   frames   : kitchen_my_home/frames/overlap300_v2/ (overlap selection, stride 6, at most 300 frames)
 #   run      : .venv-gpu/bin/python main.py kitchen_abl_seq_noloop.yaml
 #   flow     : cpu (COLMAP SIFT + incremental mapper, sfm.technique colmap); T2 ablation 5.A.3,
 #              table built by kitchen_ablation.yaml (evaluation.ablation_runs)
@@ -33,7 +33,7 @@ run:
 extraction:                   # src/extrair_quadros.py
   rerun: false                # true = extract again (old img_* and selecao.csv in output_dir are deleted); false = reuse frames if selecao.csv exists
   video: kitchen_my_home.MOV  # dataset of this copy
-  output_dir: kitchen_my_home/frames/overlap300  # ablation: shared by every kitchen_abl_* run with 300 frames (extracted once)
+  output_dir: kitchen_my_home/frames/overlap300_v2  # ablation: shared by every kitchen_abl_* run with 300 frames (extracted once)
   tag: null                   # null = SHA-1[:8] of this block without rerun/tag/output_dir (same params -> same frames)
   selection: overlap          # ablation: 60-80% overlap selection (R1) | all = every stride-th frame, dropped only by extraction.blur (overlap/sharp_percentile ignored) | overlap = greedy overlap selection
   min_frames: 270             # ablation: band [270, 300] | all: only warns below it | overlap: lower bound of the target adjustment
