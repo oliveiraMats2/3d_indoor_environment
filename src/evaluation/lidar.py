@@ -27,7 +27,8 @@
 #      scale/scale.npy, artifacts room_fill.csv (cm_per_model_unit), planes/T_floor.npy, sfm/{cam_R,centers}.npy;
 #      <ws>/medidas/medidas.yaml (contorno_cm, pe_direito_cm).
 # Out: <run_dir>/lidar/{T_<method>.npy (4x4 similarity native units -> LiDAR cm), lidar_mesh.ply};
-#      artifacts lidar_eval.csv (one row per method, key method), lidar_dims.csv (key dimension).
+#      artifacts lidar_eval.csv (one row per method, key method: n_points, accuracy, completeness, F-score,
+#      measure_err_pct), lidar_dims.csv (key dimension).
 # YAML: lidar.{path: null, unit: m|cm|mm, voxel_cm: 1.0, taus_cm: [2, 5, 10], icp_voxels_cm: [8, 4, 2],
 #      methods: auto | [names], up: auto|x|y|z|-x|-y|-z, crop_margin_cm: 10, mesh: true, poisson_depth: 10,
 #      measurements: null (-> <ws>/medidas/medidas.yaml), min_fitness: 0.5}.
@@ -40,7 +41,11 @@
 #   Each cloud gets a Manhattan frame (up + dominant wall direction, or 3 dominant normal directions); the
 #   candidates are the cube rotations between both frames (4 yaws 0/90/180/270 when both ups are known, else 24)
 #   plus FPFH RANSAC; each is refined by a coarse scaled ICP (Umeyama) and the highest fitness wins. The global
-#   search runs once on the reference (first dense method); the other methods start from it.
+#   search runs once on the reference (first dense method); the other methods start from it and fall back to
+#   the global search below min_fitness, keeping whichever ends with the higher fitness. Candidate scales are
+#   bounded to s0 * [0.8, 1.25] when the metric scale is known (scale.npy / room_fill), else [0.5, 2].
+# - measure_err_pct = 100 (init_cm_per_unit / cm_per_unit - 1): error of any length measured on the
+#   pipeline's metric model vs the LiDAR (empty when the initial scale came from the extent).
 # - Refinement: scaled point-to-point ICP (Umeyama, trimmed) over icp_voxels_cm, then point-to-plane
 #   open3d.t multi_scale_icp on CUDA (CPU + WARNING without CUDA) with the scale fixed.
 # - Metrics in cm after voxelising both clouds at voxel_cm: accuracy = recon -> full LiDAR distances
@@ -421,9 +426,10 @@ def fpfh_candidate(src_cm: np.ndarray, tgt_cm: np.ndarray, v: float) -> np.ndarr
 
 def global_align(src: np.ndarray, s0: float, up_r: np.ndarray | None, lidar: np.ndarray,
                  frame_l: np.ndarray, up_l_known: bool, voxels: list[float],
-                 rng: np.random.Generator) -> tuple[np.ndarray, float, str]:
+                 rng: np.random.Generator, band: tuple[float, float] = (0.5, 2.0)) -> tuple[np.ndarray, float, str]:
     """Best similarity (native -> LiDAR cm) over cube-rotation candidates between the Manhattan frames and
-    FPFH RANSAC, each refined by the coarse scaled ICP. Returns (T, fitness, candidate name)."""
+    FPFH RANSAC, each refined by the coarse scaled ICP; candidates whose scale leaves band * s0 are dropped
+    (a shrunken cloud scores a high coarse fitness inside the room). Returns (T, fitness, candidate name)."""
 
     v = voxels[0]
     src_cm = voxel(src * s0, v)
@@ -446,7 +452,7 @@ def global_align(src: np.ndarray, s0: float, up_r: np.ndarray | None, lidar: np.
     for name, T in cands:
         T_c, fit = scaled_icp(src, T, lidar, [2 * v, v], iters=25)
         s_c = decompose(T_c)[0]
-        if not 0.5 < s_c / s0 < 2.0:
+        if not band[0] < s_c / s0 < band[1]:
             continue
         log.debug("lidar candidate %s fitness %.3f scale %.4g", name, fit, s_c)
         if fit > best[1]:
@@ -599,20 +605,26 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
             s_from = "extent"
         s0 = s0_model * to_model
         pts_native = load_source(path, kind, v_cm / s0)
+        n_points = len(pts_native)
         pts_native = voxel(pts_native, 0.5 * v_cm / s0)
         if len(pts_native) < 100:
             log.warning("lidar: %s has %d points, skipped", name, len(pts_native))
             continue
 
-        cand = "reference"
+        cand, T, fit = "reference", None, -1.0
         if T_ref is not None:
             T, fit = scaled_icp(pts_native, T_ref @ similarity(to_model, np.eye(3), np.zeros(3)), lidar, voxels)
         if T_ref is None or fit < lc["min_fitness"]:
-            T, fit, cand = global_align(pts_native, s0, up_r, lidar, frame_l, up_l is not None, voxels, rng)
+            band = (0.5, 2.0) if s_from == "extent" else (0.8, 1.25)  # metric scale known: +-25 %
+            T_g, fit_g, cand_g = global_align(pts_native, s0, up_r, lidar, frame_l, up_l is not None, voxels,
+                                              rng, band)
+            if T_g is not None:
+                T_g, fit_g = scaled_icp(pts_native, T_g, lidar, voxels)
+            if T_g is not None and fit_g > fit:  # a noisy method keeps the reference start unless beaten
+                T, fit, cand = T_g, fit_g, cand_g
             if T is None:
                 log.warning("lidar: %s could not be aligned", name)
                 continue
-            T, fit = scaled_icp(pts_native, T, lidar, voxels)
             if T_ref is None:
                 T_ref = T @ similarity(1.0 / to_model, np.eye(3), np.zeros(3))  # model units -> cm
         T, fit_pl, rmse = p2plane_icp(pts_native, T, lidar, voxels, dev)
@@ -623,8 +635,11 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         boxes.append(box)
         crop = lidar[in_box(lidar, frame_l, box)]
         s_est = decompose(T)[0]
-        row = {"method": name, "source": str(path.relative_to(run_dir)), "init_scale_from": s_from,
-               "init_cm_per_unit": round(s0, 6), "cm_per_unit": round(s_est, 6), "align": cand,
+        # error of any length measured on the pipeline's metric model (its own scale) vs the LiDAR
+        meas_err = None if s_from == "extent" else round(100.0 * (s0 / s_est - 1.0), 3)
+        row = {"method": name, "source": str(path.relative_to(run_dir)), "n_points": n_points,
+               "init_scale_from": s_from, "init_cm_per_unit": round(s0, 6), "cm_per_unit": round(s_est, 6),
+               "measure_err_pct": meas_err, "align": cand,
                "fitness_scaled_icp": round(fit, 4), "fitness_p2plane": round(fit_pl, 4), "icp_rmse_cm": round(rmse, 4),
                **tnt_metrics(recon, lidar, crop, taus, dev), "t_s": round(time.perf_counter() - t0, 3)}
         stage_io.log_metrics(log, row)
@@ -656,8 +671,9 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
             else:
                 crop = lidar
             np.save(out / "T_lidar_poisson.npy", np.eye(4))
-            row = {"method": "lidar_poisson", "source": "lidar/lidar_mesh.ply", "init_scale_from": "",
-                   "init_cm_per_unit": 1.0, "cm_per_unit": 1.0, "align": "identity",
+            row = {"method": "lidar_poisson", "source": "lidar/lidar_mesh.ply", "n_points": len(mesh.vertices),
+                   "init_scale_from": "", "init_cm_per_unit": 1.0, "cm_per_unit": 1.0, "measure_err_pct": 0.0,
+                   "align": "identity",
                    **tnt_metrics(pts, lidar, crop, taus, dev), "t_s": round(time.perf_counter() - t0, 3)}
             stage_io.log_metrics(log, row)
             stage_io.upsert_csv(artifacts_dir / "lidar_eval.csv", row, key="method")
