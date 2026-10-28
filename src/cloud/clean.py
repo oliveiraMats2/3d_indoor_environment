@@ -30,6 +30,10 @@
 # Rules: statistical outlier removal -> voxel_down_sample(voxel_cm * units_per_cm) -> axis-aligned crop at
 #   the per-axis crop_percentiles. Missing source -> WARNING and return None. device CUDA:0 uses the
 #   open3d.t API; CUDA unavailable or failing -> WARNING and legacy CPU. voxel_cm <= 0 skips the voxel step.
+#   CUDA voxel grid is anchored at the origin, legacy at min bound - voxel/2: counts differ slightly (<0.2% on
+#   the kitchen). The device actually used is logged and stored in the CSV row (device); after a CUDA run the Open3D CUDA
+#   memory cache is released (release_cuda) so later GPU stages (Gaussian Splatting) get that VRAM back.
+#   resolve_device / release_cuda are shared with src/mesh/{poisson,room_fill}.py.
 
 # >>> BEGIN IMPLEMENTATION >>>
 """Point-cloud cleanup: statistical outliers, voxel downsampling and percentile crop."""
@@ -44,6 +48,26 @@ from src import stage_io
 log = logging.getLogger(__name__)
 
 SOURCES = ("sparse", "patch_match", "openmvs")
+
+def resolve_device(device: str | None, what: str = "open3d") -> str:
+    """auto -> CUDA:0 when this Open3D build sees a CUDA GPU (Linux CUDA wheels), else CPU:0; CUDA:n without
+    CUDA -> CPU:0 (WARNING). Returns an Open3D device string."""
+
+    device = str(device or "CPU:0")
+    if device.lower() == "auto":
+        device = "CUDA:0" if o3d.core.cuda.is_available() else "CPU:0"
+        log.info("%s: device auto -> %s", what, device)
+    elif device.upper().startswith("CUDA") and not o3d.core.cuda.is_available():
+        log.warning("%s: CUDA not available in Open3D, falling back to CPU", what)
+        device = "CPU:0"
+
+    return device.upper()
+
+def release_cuda() -> None:
+    """Return the Open3D CUDA memory-manager cache to the driver (the CUDA context itself stays)."""
+
+    if o3d.core.cuda.is_available():
+        o3d.core.cuda.release_cache()
 
 def load_source(run_dir: Path, source: str) -> tuple[np.ndarray, np.ndarray] | None:
     """Points in working units and RGB uint8 colors of a source, None when missing."""
@@ -125,23 +149,20 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str, source: str) -> Path | None
         return None
 
     voxel = c["voxel_cm"] * stage_io.units_per_cm(run_dir, points, room_extent_cm=cfg["scale"]["provisional_extent_cm"])
-    device = c.get("device", "CPU:0")
-    if device == "auto":  # CUDA:0 when this Open3D build sees a CUDA GPU (Linux CUDA wheels), else CPU
-        device = "CUDA:0" if o3d.core.cuda.is_available() else "CPU:0"
-        log.info("cleanup: device auto -> %s", device)
+    device = resolve_device(c.get("device", "CPU:0"), "cleanup")
     args = (points, colors, c["nb_neighbors"], c["std_ratio"], voxel)
 
-    result = None
-    if device.upper().startswith("CUDA"):
-        if o3d.core.cuda.is_available():
-            try:
-                result = filter_tensor(*args, device=device)
-            except Exception as exc:  # noqa: BLE001 - any device failure falls back to CPU
-                log.warning("cleanup: %s failed (%s), falling back to legacy CPU", device, exc)
-        else:
-            log.warning("cleanup: CUDA not available in Open3D, falling back to legacy CPU")
+    result, used = None, "CPU:0 (legacy)"
+    if device.startswith("CUDA"):
+        try:
+            result, used = filter_tensor(*args, device=device), device
+        except Exception as exc:  # noqa: BLE001 - any device failure falls back to CPU
+            log.warning("cleanup: %s failed (%s), falling back to legacy CPU", device, exc)
+        finally:
+            release_cuda()
     if result is None:
         result = filter_legacy(*args)
+    log.info("cleanup %s: outliers/voxel on %s", source, used)
 
     (pts_o, _), (pts_v, col_v) = result
     keep = crop_percentiles(pts_v, *c["crop_percentiles"])
@@ -155,7 +176,7 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str, source: str) -> Path | None
     stage_io.write_ply(out_dir / "cloud_clean.ply", pts_c, col_c)
 
     row = {"source": source, "n_before": n_before, "n_after_outlier": len(pts_o),
-           "n_after_voxel": len(pts_v), "n_after_crop": len(pts_c)}
+           "n_after_voxel": len(pts_v), "n_after_crop": len(pts_c), "device": used}
     stage_io.log_metrics(log, row)
     stage_io.upsert_csv(Path(artifacts_dir) / "cleanup.csv", row, key="source")
 
@@ -201,6 +222,19 @@ if __name__ == "__main__":
 
         out3 = run({**cfg, "cleanup": {**cfg["cleanup"], "device": "auto"}}, run_dir, art, "sparse")  # CUDA:0 or CPU:0
         assert np.abs(np.load(out3 / "points.npy")).max() < 1000
+
+        if o3d.core.cuda.is_available():  # CUDA (float32, open3d.t) vs legacy CPU (float64) on the same cloud
+            args = (pts, cols, 20, 2.0, 5.0)
+            (o_cpu, _), (v_cpu, _) = filter_legacy(*args)
+            (o_gpu, _), (v_gpu, _) = filter_tensor(*args, device="CUDA:0")
+            release_cuda()
+            assert abs(len(o_gpu) - len(o_cpu)) <= 0.001 * len(o_cpu), (len(o_gpu), len(o_cpu))
+            # voxel grids are anchored differently (legacy: min bound - voxel/2, open3d.t: origin), so the
+            # counts differ on this flat plane (z noise straddles z = 0); both cover the same cells
+            d = np.asarray(o3d.geometry.PointCloud(o3d.utility.Vector3dVector(v_gpu.astype(np.float64)))
+                           .compute_point_cloud_distance(o3d.geometry.PointCloud(o3d.utility.Vector3dVector(v_cpu))))
+            assert d.max() < 5.0 * np.sqrt(3), d.max()
+            print("CPU vs CUDA outlier/voxel counts:", len(o_cpu), len(o_gpu), len(v_cpu), len(v_gpu))
 
         rows = stage_io.read_csv(art / "cleanup.csv")
         assert [r["source"] for r in rows] == ["patch_match", "sparse"]

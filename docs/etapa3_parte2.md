@@ -12,7 +12,7 @@ $$\mathbf{x}_2^\top F\,\mathbf{x}_1 = 0,$$
 
 com $F$ de posto 2 e 7 graus de liberdade. Removendo a influência da lente pelas intrínsecas $K$, obtém-se a matriz essencial $E = K^\top F K = [\mathbf{t}]_\times R$, que depende apenas do movimento entre as câmeras (5 graus de liberdade).
 
-**Intrínsecas.** Como a câmera do celular não foi calibrada, `geometry.intrinsics` fica em `null` e $K$ é aproximada a partir da resolução $w \times h$ do primeiro quadro de cada par (`_intrinsics_matrix` em `__init__.py`): $f_x = f_y = \max(w, h)$, $c_x = w/2$, $c_y = h/2$, sem distorção. Valores explícitos no YAML substituem esses padrões. A matriz usada é salva por par (`K.npy`) e também em `results/<id>/K.npy`.
+**Intrínsecas.** Como a câmera do celular não foi calibrada, `geometry.intrinsics` fica em `null` e $K$ é aproximada a partir da resolução $w \times h$ do primeiro quadro de cada par (`_intrinsics_matrix` em `__init__.py`): $f_x = f_y = \max(w, h)$, $c_x = w/2$, $c_y = h/2$, sem distorção. Valores explícitos no YAML substituem esses padrões. A matriz usada é salva por par (`K.npy`) e também em `<ws>/results/<id>/K.npy`.
 
 **Estimação robusta.** Para cada par com pelo menos 8 correspondências, `estimate.py` chama `cv2.findFundamentalMat` (pontos em pixels) e `cv2.findEssentialMat` (pontos em pixels e $K$), ambos com o método indicado em `geometry.ransac.method`, resolvido com `getattr(cv2, ...)`. O padrão é `USAC_MAGSAC`, variante do RANSAC que pondera os resíduos por um modelo de ruído marginalizado e é menos sensível ao limiar fixo. Os parâmetros vêm do YAML: `threshold_px = 1.0` (distância máxima, em pixels, de um inlier à sua linha epipolar), `confidence = 0.999` e `max_iters = 5000`. Pares com menos de 8 correspondências, ou para os quais o estimador falha, recebem matrizes preenchidas com NaN e máscara vazia.
 
@@ -35,7 +35,7 @@ A decomposição de $E$ por SVD fornece quatro soluções candidatas: duas rota�
 
 ## 4. Linhas epipolares
 
-Dado $F$, a linha epipolar de $\mathbf{x}_1$ na imagem 2 é $\mathbf{l}' = F\mathbf{x}_1$, e a de $\mathbf{x}_2$ na imagem 1 é $\mathbf{l} = F^\top\mathbf{x}_2$, cada uma na forma $(a, b, c)$ com $ax + by + c = 0$. `visualize.py` sorteia, sem reposição, `visualize.epilines.n_lines = 20` inliers usando um gerador inicializado com `run.seed` (reprodutível) e calcula ambas as linhas com `cv2.computeCorrespondEpilines`. A figura coloca as duas imagens lado a lado, na mesma altura, com largura total de 12 polegadas a `dpi = 150`; cada correspondência tem uma cor própria, e na imagem 1 desenham-se as linhas induzidas pelos pontos da imagem 2 (e vice-versa), com o ponto correspondente marcado. Se a estimação estiver correta, cada ponto cai sobre a linha da sua cor, e as linhas convergem para o epipolo. Pares com menos de 8 inliers ou $F$ não finita não geram figura. Caminho: `results/<id>/figures/epilines/<detector>/<par>.png`.
+Dado $F$, a linha epipolar de $\mathbf{x}_1$ na imagem 2 é $\mathbf{l}' = F\mathbf{x}_1$, e a de $\mathbf{x}_2$ na imagem 1 é $\mathbf{l} = F^\top\mathbf{x}_2$, cada uma na forma $(a, b, c)$ com $ax + by + c = 0$. `visualize.py` sorteia, sem reposição, `visualize.epilines.n_lines = 20` inliers usando um gerador inicializado com `run.seed` (reprodutível) e calcula ambas as linhas com `cv2.computeCorrespondEpilines`. A figura coloca as duas imagens lado a lado, na mesma altura, com largura total de 12 polegadas a `dpi = 150`; cada correspondência tem uma cor própria, e na imagem 1 desenham-se as linhas induzidas pelos pontos da imagem 2 (e vice-versa), com o ponto correspondente marcado. Se a estimação estiver correta, cada ponto cai sobre a linha da sua cor, e as linhas convergem para o epipolo. Pares com menos de 8 inliers ou $F$ não finita não geram figura. Caminho: `<ws>/results/<id>/figures/epilines/<detector>/<par>.png`.
 
 ## 5. Triangulação da nuvem inicial
 
@@ -51,7 +51,9 @@ Saídas por par: `points3d.npy` ($N \times 3$), `colors.npy` ($N \times 3$, `uin
 
 ## 6. Saídas e métricas
 
-Para cada par, em `results/<id>/epipolar/<detector>/<quadro1>__<quadro2>/`:
+`<ws>` é `extraction.video` sem a extensão (por exemplo `3d_image_video` ou `kitchen_my_home`) e `<id>` é `run.id` (`null` = nome do arquivo YAML).
+
+Para cada par, em `<ws>/results/<id>/epipolar/<detector>/<quadro1>__<quadro2>/`:
 
 | Arquivo | Conteúdo |
 |---|---|
@@ -61,11 +63,11 @@ Para cada par, em `results/<id>/epipolar/<detector>/<quadro1>__<quadro2>/`:
 | `R.npy`, `t.npy`, `pose_mask.npy` | pose relativa ($\|\mathbf{t}\|=1$) e inliers que passam na quiralidade |
 | `points3d.npy`, `colors.npy`, `cloud.ply` | nuvem triangulada e suas cores |
 
-As métricas de todos os pares são agregadas em `artifacts/<id>/epipolar_metrics.csv`, uma linha por par (chave `id = <detector>/<par>`), com as colunas: `id`, `detector`, `pair`, `n_matches` (correspondências de Lowe), `n_inliers` (inliers $F \wedge E$), `rot_deg`, `t_x`, `t_y`, `t_z`, `n_pose_inliers`, `n_points3d`, `parallax_med_deg` e `cheirality_frac`. Ao final de cada detector, o log registra o número de pares, o número de pares com pose recuperada e a mediana de cada métrica. As figuras ficam em `results/<id>/figures/epilines/<detector>/<par>.png`.
+As métricas de todos os pares são agregadas em `<ws>/artifacts/<id>/epipolar_metrics.csv`, uma linha por par (chave `id = <detector>/<par>`), com as colunas: `id`, `detector`, `pair`, `n_matches` (correspondências de Lowe), `n_inliers` (inliers $F \wedge E$), `rot_deg`, `t_x`, `t_y`, `t_z`, `n_pose_inliers`, `n_points3d`, `parallax_med_deg` e `cheirality_frac`. Ao final de cada detector, o log registra o número de pares, o número de pares com pose recuperada e a mediana de cada métrica. As figuras ficam em `<ws>/results/<id>/figures/epilines/<detector>/<par>.png`.
 
 ## 7. Resultados
 
-Execução de `python main.py` com o `config.yaml` deste repositório sobre `3d_image_video.MOV` (retrato, quadros salvos em 1920×3413): a extração selecionou 101 quadros pela meta de sobreposição de 0,70, a etapa de qualidade manteve 61 e cada detector gerou 60 pares consecutivos. Valores de `artifacts/config/epipolar_metrics.csv` e `artifacts/config/matching_metrics.csv`; as medianas das colunas de pose e triangulação consideram apenas os pares com pose recuperada.
+Execução, a partir da raiz do repositório, de `.venv-gpu/bin/python main.py default.yaml` (`configs/default.yaml`, vídeo `3d_image_video.MOV`, retrato, quadros salvos em 1920×3413); para a cozinha usa-se um config próprio, por exemplo `.venv-gpu/bin/python main.py kitchen_my_home_glomap.yaml`. Na execução reportada: a extração selecionou 101 quadros pela meta de sobreposição de 0,70, a etapa de qualidade manteve 61 e cada detector gerou 60 pares consecutivos. Valores de `<ws>/artifacts/<id>/epipolar_metrics.csv` e `<ws>/artifacts/<id>/matching_metrics.csv`; as medianas das colunas de pose e triangulação consideram apenas os pares com pose recuperada.
 
 | Detector | Pares | Com pose | Correspondências (Lowe) | Inliers $F \wedge E$ | Inliers de pose | Rotação (°) | Pontos 3D por par | Pontos 3D (total) | Paralaxe (°) | Fração quiral | Sampson (px) |
 |---|---|---|---|---|---|---|---|---|---|---|---|

@@ -48,3 +48,4 @@ results/
 
 # workspace of the kitchen_my_home_<technique>.yaml runs
 /kitchen_my_home/
+third_party/

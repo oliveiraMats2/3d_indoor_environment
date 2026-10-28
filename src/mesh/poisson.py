@@ -24,9 +24,18 @@
 #      sparse, scale/points3d_cm.npy + sfm/colors.npy (src.cloud.clean.load_source); scale/centers_cm.npy.
 # Out: mesh/poisson/<variant>/{mesh.ply,vertices,faces,colors}.npy, exports/meshlab/poisson_<variant>.ply;
 #      artifacts_dir/poisson.csv keyed by variant (variant, source, n_points_in, n_vertices, n_faces, depth,
-#      density_quantile, t_s).
-# YAML: poisson: {enabled, source: dense|sparse, variants: [pre, raw], depth, density_quantile, normal_knn, threads}
+#      density_quantile, normals_device, t_normals_s, t_poisson_s, t_s). With poisson.method set:
+#      mesh/poisson_<method>/<variant>/..., exports/meshlab/poisson_<method>_<variant>.ply, CSV variant
+#      "<method>/<variant>" (nothing of the default output is overwritten).
+# YAML: poisson: {enabled, source: dense|sparse, variants: [pre, raw], depth, density_quantile, normal_knn, threads,
+#       method: null, device: auto}
 # Rules: source dense = first cfg["dense"]["methods"] entry with output for the variant, else sparse (WARNING).
+#        poisson.method null -> that default; a method name (or a list of names) -> the cloud of each named method
+#        (dense/<m> or sparse), missing -> WARNING and that method skipped, so every densifier can be meshed.
+#        The nearest-camera search of the orientation runs on poisson.device (auto -> CUDA:0 when Open3D sees a
+#        GPU: open3d.core.nns 1-NN in float64, ~100x faster than the numpy search; any failure -> CPU, WARNING);
+#        the Open3D CUDA cache is released after it. Normal estimation stays on the legacy CPU KD-tree (faster
+#        than open3d.t on CUDA: FP64 is slow on GeForce cards, FP32 still ~7x slower) and Poisson on the CPU.
 #        Normals (knn) are oriented per point towards its NEAREST camera center (more robust in a room than
 #        one mean center, which flips the walls behind it); no centers -> tangent-plane consistency (WARNING).
 #        Vertices with density below the density_quantile are dropped. threads -1 (all cores) oversubscribes
@@ -44,6 +53,7 @@ import open3d as o3d
 
 from src import stage_io
 from src.cloud import clean
+from src.cloud.clean import release_cuda, resolve_device
 
 log = logging.getLogger(__name__)
 
@@ -56,10 +66,16 @@ def cloud_path(run_dir: Path, source: str, variant: str) -> Path:
 
     return run_dir / "scale" / "points3d_cm.npy" if source == "sparse" else run_dir / "dense" / source / "points.npy"
 
-def pick_source(cfg: dict, run_dir: Path, variant: str = "pre") -> str | None:
-    """poisson.source dense -> first dense.methods entry with a cloud for the variant, else sparse (WARNING)."""
+def pick_source(cfg: dict, run_dir: Path, variant: str = "pre", method: str | None = None) -> str | None:
+    """poisson.source dense -> first dense.methods entry with a cloud for the variant, else sparse (WARNING).
+    method given -> that source only (None + WARNING when its cloud is missing)."""
 
     run_dir = Path(run_dir)
+    if method is not None:
+        if cloud_path(run_dir, method, variant).exists():
+            return method
+        log.warning("poisson.method=%s: no %s cloud (%s), skipped", method, variant, cloud_path(run_dir, method, variant))
+        return None
     if cfg["poisson"]["source"] == "dense":
         for method in cfg["dense"]["methods"]:
             if cloud_path(run_dir, method, variant).exists():
@@ -116,20 +132,54 @@ def orient_to_nearest_camera(points: np.ndarray, normals: np.ndarray, centers: n
 
     return out
 
-def reconstruct(points: np.ndarray, colors: np.ndarray | None, centers: np.ndarray | None,
-                pcfg: dict) -> o3d.geometry.TriangleMesh:
-    """Normals (knn, oriented to the nearest camera) -> Poisson(depth, threads) -> density-quantile trim."""
+def nearest_center_tensor(points: np.ndarray, centers: np.ndarray, device: str) -> np.ndarray:
+    """Index of the nearest camera center of each point (open3d.core.nns 1-NN, float64) on an Open3D device."""
 
+    dev = o3d.core.Device(device)
+    nns = o3d.core.nns.NearestNeighborSearch(o3d.core.Tensor(np.ascontiguousarray(centers, dtype=np.float64), device=dev))
+    nns.knn_index()
+
+    return nns.knn_search(o3d.core.Tensor(np.ascontiguousarray(points, dtype=np.float64), device=dev), 1)[0].cpu().numpy().reshape(-1)
+
+def estimate_normals(pcd: o3d.geometry.PointCloud, points: np.ndarray, centers: np.ndarray | None,
+                     pcfg: dict) -> str:
+    """Fill pcd.normals: knn normals (legacy CPU KD-tree), flipped towards the nearest camera center searched on
+    poisson.device (CUDA: open3d.core.nns; CPU or failure: chunked numpy), else tangent-plane consistency.
+    Returns the device of the nearest-camera search."""
+
+    pcd.estimate_normals(o3d.geometry.KDTreeSearchParamKNN(knn=pcfg["normal_knn"]))
+    if centers is None or len(centers) == 0:
+        log.warning("no camera centers: normals oriented by tangent-plane consistency only")
+        pcd.orient_normals_consistent_tangent_plane(pcfg["normal_knn"])
+        return "CPU:0"
+
+    normals = np.asarray(pcd.normals).copy()
+    device = resolve_device(pcfg.get("device", "auto"), "poisson")
+    if device.startswith("CUDA"):
+        try:
+            nearest = nearest_center_tensor(points, centers, device)
+            normals[(normals * (centers[nearest] - points)).sum(1) < 0] *= -1
+            pcd.normals = o3d.utility.Vector3dVector(normals)
+            return device
+        except Exception as exc:  # noqa: BLE001 - any device failure falls back to the CPU search
+            log.warning("poisson: nearest-camera search on %s failed (%s), using the CPU", device, exc)
+        finally:
+            release_cuda()
+    pcd.normals = o3d.utility.Vector3dVector(orient_to_nearest_camera(points, normals, centers))
+
+    return "CPU:0"
+
+def reconstruct(points: np.ndarray, colors: np.ndarray | None, centers: np.ndarray | None,
+                pcfg: dict, info: dict | None = None) -> o3d.geometry.TriangleMesh:
+    """Normals (knn, oriented to the nearest camera searched on poisson.device) -> Poisson(depth, threads, CPU)
+    -> density-quantile trim. info (optional) receives normals_device, t_normals_s and t_poisson_s."""
+
+    t0 = time.perf_counter()
     pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points.astype(np.float64)))
     if colors is not None:
         pcd.colors = o3d.utility.Vector3dVector(colors.astype(np.float64) / 255.0)
-    pcd.estimate_normals(o3d.geometry.KDTreeSearchParamKNN(knn=pcfg["normal_knn"]))
-
-    if centers is not None and len(centers):
-        pcd.normals = o3d.utility.Vector3dVector(orient_to_nearest_camera(points, np.asarray(pcd.normals), centers))
-    else:
-        log.warning("no camera centers: normals oriented by tangent-plane consistency only")
-        pcd.orient_normals_consistent_tangent_plane(pcfg["normal_knn"])
+    device = estimate_normals(pcd, points, centers, pcfg)
+    t1 = time.perf_counter()
 
     mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=pcfg["depth"],
                                                                              n_threads=pcfg["threads"])
@@ -139,6 +189,8 @@ def reconstruct(points: np.ndarray, colors: np.ndarray | None, centers: np.ndarr
     mesh.remove_unreferenced_vertices()
     mesh.compute_vertex_normals()
     mesh.triangle_normals = o3d.utility.Vector3dVector()
+    if info is not None:
+        info.update(normals_device=device, t_normals_s=round(t1 - t0, 3), t_poisson_s=round(time.perf_counter() - t1, 3))
 
     return mesh
 
@@ -166,33 +218,42 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> dict | None:
     centers = load_centers(run_dir)
     meshlab = run_dir / "exports" / "meshlab"
     meshlab.mkdir(parents=True, exist_ok=True)
+    methods = pcfg.get("method")
+    methods = [None] if methods is None else [methods] if isinstance(methods, str) else list(methods)
     rows = {}
-    for variant in pcfg["variants"]:
-        t0 = time.perf_counter()
-        source = pick_source(cfg, run_dir, variant)
-        if source is None:
-            log.warning("poisson %s: no input cloud (%s), skipped", variant,
-                        "clean/<source>/points.npy" if variant == "pre" else "dense/<m> or scale/points3d_cm.npy")
-            continue
-        loaded = load_cloud(run_dir, source, variant)
-        if loaded is None:
-            continue
-        points, colors = loaded
-        log.info("poisson %s: source=%s points=%d depth=%d", variant, source, len(points), pcfg["depth"])
+    for method in methods:
+        for variant in pcfg["variants"]:
+            t0 = time.perf_counter()
+            key = variant if method is None else f"{method}/{variant}"
+            source = pick_source(cfg, run_dir, variant, method)
+            if source is None:
+                log.warning("poisson %s: no input cloud (%s), skipped", key,
+                            "clean/<source>/points.npy" if variant == "pre" else "dense/<m> or scale/points3d_cm.npy")
+                continue
+            loaded = load_cloud(run_dir, source, variant)
+            if loaded is None:
+                continue
+            points, colors = loaded
+            log.info("poisson %s: source=%s points=%d depth=%d", key, source, len(points), pcfg["depth"])
 
-        mesh = reconstruct(points, colors, centers, pcfg)
-        if len(mesh.triangles) == 0:
-            log.warning("poisson %s produced no faces (source=%s), nothing saved", variant, source)
-            continue
-        path = save_mesh(mesh, run_dir / "mesh" / "poisson" / variant)
-        shutil.copyfile(path, meshlab / f"poisson_{variant}.ply")
+            info = {}
+            mesh = reconstruct(points, colors, centers, pcfg, info)
+            if len(mesh.triangles) == 0:
+                log.warning("poisson %s produced no faces (source=%s), nothing saved", key, source)
+                continue
+            if method is None:
+                out_dir, ply = run_dir / "mesh" / "poisson" / variant, f"poisson_{variant}.ply"
+            else:
+                out_dir, ply = run_dir / "mesh" / f"poisson_{method}" / variant, f"poisson_{method}_{variant}.ply"
+            path = save_mesh(mesh, out_dir)
+            shutil.copyfile(path, meshlab / ply)
 
-        row = {"variant": variant, "source": source, "n_points_in": len(points), "n_vertices": len(mesh.vertices),
-               "n_faces": len(mesh.triangles), "depth": pcfg["depth"], "density_quantile": pcfg["density_quantile"],
-               "t_s": round(time.perf_counter() - t0, 3)}
-        stage_io.log_metrics(log, row)
-        stage_io.upsert_csv(Path(artifacts_dir) / "poisson.csv", row, key="variant")
-        rows[variant] = row
+            row = {"variant": key, "source": source, "n_points_in": len(points), "n_vertices": len(mesh.vertices),
+                   "n_faces": len(mesh.triangles), "depth": pcfg["depth"],
+                   "density_quantile": pcfg["density_quantile"], **info, "t_s": round(time.perf_counter() - t0, 3)}
+            stage_io.log_metrics(log, row)
+            stage_io.upsert_csv(Path(artifacts_dir) / "poisson.csv", row, key="variant")
+            rows[key] = row
 
     return rows or None
 # <<< END IMPLEMENTATION <<<
@@ -252,5 +313,26 @@ if __name__ == "__main__":
         run(cfg, str(run_dir), str(art))
         assert len(stage_io.read_csv(art / "poisson.csv")) == 2  # upsert by variant
         assert run({**cfg, "poisson": {**cfg["poisson"], "enabled": False}}, str(run_dir), str(art)) is None
+        # poisson.method: per-method output next to the default one, missing method skipped
+        before = (run_dir / "mesh" / "poisson" / "pre" / "mesh.ply").stat().st_mtime_ns
+        rows_m = run({**cfg, "poisson": {**cfg["poisson"], "method": ["sparse", "casmvsnet"]}}, str(run_dir), str(art))
+        assert set(rows_m) == {"sparse/pre", "sparse/raw"}, rows_m
+        assert (run_dir / "mesh" / "poisson_sparse" / "pre" / "mesh.ply").exists()
+        assert (run_dir / "exports" / "meshlab" / "poisson_sparse_raw.ply").exists()
+        assert (run_dir / "mesh" / "poisson" / "pre" / "mesh.ply").stat().st_mtime_ns == before
+        assert [r["variant"] for r in stage_io.read_csv(art / "poisson.csv")] == ["pre", "raw", "sparse/pre", "sparse/raw"]
+        assert run({**cfg, "poisson": {**cfg["poisson"], "method": "casmvsnet"}}, str(run_dir), str(art)) is None
+        # orientation: poisson.device auto (CUDA when available) vs CPU numpy search, same normals
+        pcfg = {**cfg["poisson"], "device": "CPU:0"}
+        centers = load_centers(run_dir)
+        n_dev = {}
+        for dev in ("CPU:0", "auto"):
+            pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pts))
+            used = estimate_normals(pcd, pts, centers, {**pcfg, "device": dev})
+            n_dev[used] = np.asarray(pcd.normals).copy()
+        if len(n_dev) == 2:
+            dot = (n_dev["CPU:0"] * n_dev[next(k for k in n_dev if k != "CPU:0")]).sum(1)
+            assert (dot > 0.999999).mean() > 0.999, (dot > 0.999999).mean()
+            print("normals CPU vs GPU orientation: same sign", (dot > 0).mean())
         print(csv_rows, ext)
     print("OK")

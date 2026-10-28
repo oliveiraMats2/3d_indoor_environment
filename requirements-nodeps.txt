@@ -3,3 +3,16 @@
 # InstantSfM 0.3.0 (CC BY-NC 4.0) and VGGT (VGGT License for the code; weights facebook/VGGT-1B are CC BY-NC 4.0)
 instantsfm @ git+https://github.com/cre185/InstantSfM@d3e599e1a42b4c5a806a84d9f383e1005d25f61b
 vggt @ git+https://github.com/facebookresearch/vggt@a288dd0f14786c93483e45524328726ab7b1b4ce
+# VGGT-Omega (FAIR Noncommercial; weights facebook/VGGT-Omega are gated: dense.vggt_omega.model vggt_omega)
+vggt-omega @ git+https://github.com/facebookresearch/vggt-omega@48b23c8ce72c9a8fcf987f0d7f43d8e4870759f6
+# MapAnything (code Apache 2.0; weights facebook/map-anything CC BY-NC 4.0); its own pins pull opencv-python-headless
+mapanything @ git+https://github.com/facebookresearch/map-anything@3d10cf7a3016fc0f9bb13a071ee66c47b10be0d9
+uniception==0.1.7
+torchaudio @ https://download.pytorch.org/whl/cu128/torchaudio-2.8.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl
+# measurement OCR (src/measurements/ocr.py); rapidocr pins opencv-python, opencv-contrib-python covers cv2
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.31.1
+pyclipper==1.4.0
+shapely==2.2.0
+flatbuffers==25.12.19
+protobuf==7.36.2

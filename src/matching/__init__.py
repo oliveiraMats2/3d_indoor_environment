@@ -117,3 +117,4 @@ def run(cfg: dict, filters_cfg: dict, run_dir: str) -> None:
             pair_name = f"{first.name}__{second.name}"
             pair_dir = Path(run_dir) / "matching" / detector_dir.name / pair_name
             _save_pair(pair_dir, raw_matches, lowe_result.matches, times_ms)
+    __import__("src.matching.cross_check", fromlist=["run"]).run(cfg, filters_cfg, run_dir)  # filters.cross_check

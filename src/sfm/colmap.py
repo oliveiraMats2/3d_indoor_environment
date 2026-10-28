@@ -28,7 +28,15 @@
 #         vocab_tree, mapper (incremental|global), use_gpu, gpu_index, ba_use_gpu, max_image_size,
 #         max_num_features, min_num_matches, multiple_models, ba_global_max_num_iterations,
 #         ba_global_max_refinements, ba_global_frames_ratio, max_camera_spread (lone far cameras deregistered after
-#         the mapper and on reuse), project_quality, backend (auto|cli|pycolmap)}.
+#         the mapper and on reuse), project_quality, backend (auto|cli|pycolmap), container (Docker image tag
+#         or null = host binary), container_ba_use_gpu (global_mapper BA on the GPU inside the container;
+#         null = follow ba_use_gpu), container_steps (steps run in the container: [mapper] default = only
+#         mapper/global_mapper; feature, match, export or [all])}.
+# Container: sfm.container set (flow gpu, image t2/colmap-cudss:4.2.0 = Ceres with cuDSS) -> the COLMAP
+#         commands of the sfm.container_steps run through src/sfm/container.py (the others keep the host
+#         CUDA binary: its SIFT matching is ~3x faster); colmap_info() probes the image's binary; image
+#         missing -> WARNING, host binary; host binary missing -> every step in the container. null -> the
+#         commands are exactly the host ones.
 # Backend: the COLMAP CLI below is the primary path. backend(cfg) picks it whenever sfm.colmap_bin is a
 #         COLMAP >= 4.0 (auto); pycolmap (src/sfm/pycolmap_backend.py, same outputs and CSV columns) only
 #         when the binary is missing or with sfm.backend: pycolmap.
@@ -53,6 +61,7 @@ import cv2
 import numpy as np
 
 from src import stage_io
+from src.sfm import container
 
 log = logging.getLogger(__name__)
 
@@ -67,16 +76,22 @@ def parse_banner(text: str) -> tuple[tuple[int, int] | None, bool]:
     return ((int(m.group(1)), int(m.group(2))) if m else None), "with CUDA" in text
 
 @functools.lru_cache(maxsize=None)
-def colmap_info(exe: str) -> dict:
+def colmap_info(exe: str, image: str | None = None) -> dict:
     """{path, version (major, minor) | None, cuda}: cuda = COLMAP built with CUDA AND `nvidia-smi -L` lists a
-    GPU. path None when the binary is not on PATH. Cached: every stage asks the same binary once."""
+    GPU. path None when the binary is not on PATH. image = Docker tag: probe the colmap inside it (path
+    "docker:<image>", None when the image is missing). Cached: every stage asks the same binary once."""
 
-    path = shutil.which(exe)
+    if image:
+        path = f"docker:{image}" if container.available(image) else None
+        probe = container.prefix(image, gpu=False) + [container.CONTAINER_EXE, "-h"] if path else None
+    else:
+        path = shutil.which(exe)
+        probe = [path, "-h"]
     if path is None:
         return {"path": None, "version": None, "cuda": False}
 
     try:
-        out = subprocess.run([path, "-h"], capture_output=True, text=True, timeout=60)
+        out = subprocess.run(probe, capture_output=True, text=True, timeout=120 if image else 60)
         version, cuda_build = parse_banner(out.stdout + out.stderr)
     except (OSError, subprocess.TimeoutExpired):
         version, cuda_build = None, False
@@ -95,9 +110,9 @@ def colmap_info(exe: str) -> dict:
     return info
 
 @functools.lru_cache(maxsize=None)
-def _backend(requested: str, exe: str) -> str:
+def _backend(requested: str, exe: str, image: str | None = None) -> str:
 
-    info = colmap_info(exe)
+    info = colmap_info(exe, image) if image and container.available(image) else colmap_info(exe)
     cli_ok = info["path"] is not None and info["version"] is not None and info["version"] >= MIN_VERSION
     py_ok = importlib.util.find_spec("pycolmap") is not None
     if requested == "cli" or (requested == "auto" and (cli_ok or not py_ok)):
@@ -119,7 +134,18 @@ def backend(cfg: dict) -> str:
 
     scfg = cfg["sfm"]
 
-    return _backend(scfg.get("backend", "auto"), scfg["colmap_bin"])
+    return _backend(scfg.get("backend", "auto"), scfg["colmap_bin"], scfg.get("container"))
+
+STEPS = ("feature", "match", "mapper", "export")
+
+def image_for(scfg: dict, step: str) -> str | None:
+    """Docker image that runs `step` (feature|match|mapper|export), None = host binary."""
+
+    steps = scfg.get("container_steps") or ["mapper"]
+    if not scfg.get("container") or not ("all" in steps or step in steps):
+        return None
+
+    return scfg["container"]
 
 def resolve_gpu(value, info: dict) -> bool:
     """sfm.use_gpu true | false | "auto" -> bool. auto = CUDA available; true without CUDA -> WARNING, CPU."""
@@ -244,12 +270,16 @@ def build_commands(scfg: dict, ws: Path, cam_params: list[float] | None, seed: i
                 mapper += [f"--Mapper.{name}", str(scfg[name])]
         prefix = "--Mapper."
     elif scfg["mapper"] == "global":
+        # the container's Ceres has cuDSS: BA on the GPU by default there (sfm.container_ba_use_gpu)
+        ba_gpu = scfg["ba_use_gpu"]
+        if image_for(scfg, "mapper") and scfg.get("container_ba_use_gpu", True) is not None:
+            ba_gpu = scfg.get("container_ba_use_gpu", True)
         mapper = [exe, "global_mapper", *common, "--database_path", db, "--image_path", images,
                   "--output_path", sparse, "--GlobalMapper.random_seed", str(seed),
                   "--GlobalMapper.min_num_matches", str(scfg["min_num_matches"]),
                   "--GlobalMapper.multiple_models", _b(scfg["multiple_models"]),
                   "--GlobalMapper.gp_use_gpu", gpu, "--GlobalMapper.gp_gpu_index", gpu_idx,
-                  "--GlobalMapper.ba_ceres_use_gpu", _b(scfg["use_gpu"] and scfg["ba_use_gpu"]),
+                  "--GlobalMapper.ba_ceres_use_gpu", _b(scfg["use_gpu"] and ba_gpu),
                   "--GlobalMapper.ba_gpu_index", gpu_idx]
         prefix = "--GlobalMapper."
     else:
@@ -328,9 +358,13 @@ def patch_ini(path: Path, values: dict[tuple[str, str], str]) -> None:
 
     path.write_text("\n".join(lines) + "\n")
 
-def _run(cmd: list[str], log_path: Path) -> float:
-    """Runs one COLMAP command appending stdout/stderr to log_path; returns wall time (s)."""
+def _run(cmd: list[str], log_path: Path, image: str | None = None) -> float:
+    """Runs one COLMAP command appending stdout/stderr to log_path; returns wall time (s). image = Docker tag:
+    run it with the image's colmap (container.wrap)."""
 
+    step = cmd[1]
+    if image:
+        cmd = container.wrap(image, cmd)
     log.info("$ %s", " ".join(cmd))
     t0 = time.perf_counter()
     with open(log_path, "a") as fh:
@@ -339,7 +373,7 @@ def _run(cmd: list[str], log_path: Path) -> float:
         try:
             subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT, check=True)
         except subprocess.CalledProcessError:
-            log.error("COLMAP failed: %s (see %s)", cmd[1], log_path)
+            log.error("COLMAP failed: %s (see %s)", step, log_path)
             raise
     dt = time.perf_counter() - t0
     with open(log_path, "a") as fh:
@@ -381,15 +415,15 @@ def export_model(scfg: dict, ws: Path, model: Path, cam_params: list[float] | No
     """TXT next to the .bin, sparse.ply, project.ini with paths RELATIVE to exports/colmap/ (portable:
     open it with `cd exports/colmap && colmap gui --project_path project.ini`)."""
 
-    exe, log_path = scfg["colmap_bin"], ws / "colmap.log"
+    exe, log_path, image = scfg["colmap_bin"], ws / "colmap.log", image_for(scfg, "export")
     _run([exe, "model_converter", "--log_color", "0", "--input_path", str(model), "--output_path", str(model),
-          "--output_type", "TXT"], log_path)
+          "--output_type", "TXT"], log_path, image)
     _run([exe, "model_converter", "--log_color", "0", "--input_path", str(model),
-          "--output_path", str(ws / "sparse.ply"), "--output_type", "PLY"], log_path)
+          "--output_path", str(ws / "sparse.ply"), "--output_type", "PLY"], log_path, image)
 
     ini = ws / "project.ini"
     _run([exe, "project_generator", "--log_color", "0", "--output_path", str(ini),
-          "--quality", scfg["project_quality"]], log_path)
+          "--quality", scfg["project_quality"]], log_path, image)
     values = {("", "database_path"): "database.db",
               ("", "image_path"): "images",
               ("", "log_color"): "false",
@@ -425,7 +459,28 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         from src.sfm import pycolmap_backend
         return pycolmap_backend.run(cfg, run_dir, artifacts_dir)
 
-    info = colmap_info(scfg["colmap_bin"])
+    if scfg.get("container") and not container.available(scfg["container"]):
+        log.warning("sfm.container %s not available (docker build -t %s docker/colmap-cudss): using %s",
+                    scfg["container"], scfg["container"], scfg["colmap_bin"])
+        cfg = {**cfg, "sfm": {**scfg, "container": None}}
+        scfg = cfg["sfm"]
+    if scfg.get("container"):
+        bad = set(scfg.get("container_steps") or ["mapper"]) - {"all", *STEPS}
+        if bad:
+            log.warning("sfm.container_steps: unknown %s (use %s or all): ignored", sorted(bad), "|".join(STEPS))
+        if not all(image_for(scfg, st) for st in STEPS) and colmap_info(scfg["colmap_bin"])["path"] is None:
+            log.warning("sfm: host COLMAP '%s' not found: every step runs in %s", scfg["colmap_bin"],
+                        scfg["container"])
+            cfg = {**cfg, "sfm": {**scfg, "container_steps": ["all"]}}
+            scfg = cfg["sfm"]
+    # GPU/version from the host binary while any step stays on the host, else from the image
+    on_host = not scfg.get("container") or not all(image_for(scfg, st) for st in STEPS)
+    info = colmap_info(scfg["colmap_bin"]) if on_host else colmap_info(scfg["colmap_bin"], scfg["container"])
+    if scfg.get("container") and on_host:
+        cinfo = colmap_info(scfg["colmap_bin"], scfg["container"])
+        if cinfo["version"] is not None and cinfo["version"] != info["version"]:
+            log.warning("sfm: host COLMAP %s and container COLMAP %s differ (they share database.db)",
+                        info["version"], cinfo["version"])
     if info["path"] is None:
         log.warning("COLMAP binary '%s' not found: sfm skipped", scfg["colmap_bin"])
         return None
@@ -476,7 +531,7 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
     times = {}
     for step in ("feature", "match", "mapper"):
         try:
-            times[f"t_{step}_s"] = round(_run(cmds[step], log_path), 2)
+            times[f"t_{step}_s"] = round(_run(cmds[step], log_path, image_for(scfg, step)), 2)
         except subprocess.CalledProcessError as exc:
             log.warning("sfm: COLMAP %s failed with exit code %s (see %s): sfm stopped", cmds[step][1],
                         exc.returncode, log_path)
@@ -499,7 +554,8 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         log.warning("sfm: exporting the model failed (see %s); sparse/0 is kept", log_path)
     log.info("sfm: sparse/0 has %d/%d registered images", n_reg, len(frames))
     write_metrics(artifacts_dir, run_id, {**times, "t_total_s": round(time.perf_counter() - t0, 2),
-                                          "matcher": scfg["matcher"], "mapper": scfg["mapper"]})
+                                          "matcher": scfg["matcher"], "mapper": scfg["mapper"],
+                                          **({"container": scfg["container"]} if scfg.get("container") else {})})
 
     return best
 
@@ -510,7 +566,8 @@ DEFAULTS = {"enabled": True, "rerun": False, "max_camera_spread": 5.0, "colmap_b
             "max_image_size": 1920, "max_num_features": 8192, "min_num_matches": 15, "multiple_models": True,
             "ba_global_max_num_iterations": None, "ba_global_max_refinements": None,
             "ba_global_frames_ratio": None, "project_quality": "high",
-            "link_images": "auto", "backend": "auto"}
+            "link_images": "auto", "backend": "auto",
+            "container": None, "container_ba_use_gpu": True, "container_steps": ["mapper"]}
 
 if __name__ == "__main__":
     import os
@@ -575,6 +632,31 @@ if __name__ == "__main__":
     assert flag(c["mapper"], "--Mapper.ba_global_frames_ratio") == "1.3"
     c = build_commands({**s, "ba_global_frames_ratio": 1.3}, ws, params, 1)  # global mapper: incremental-only key ignored
     assert "--Mapper.ba_global_frames_ratio" not in c["mapper"]
+
+    # container: global_mapper BA on the GPU by default (explicit container_ba_use_gpu respected; null follows
+    # ba_use_gpu); no container -> commands identical to the host ones
+    g = {**DEFAULTS, "mapper": "global", "use_gpu": True}
+    host = build_commands(g, ws, None, 0)
+    assert flag(host["mapper"], "--GlobalMapper.ba_ceres_use_gpu") == "0"
+    assert build_commands({**g, "container": None, "container_ba_use_gpu": False}, ws, None, 0) == host
+    c = build_commands({**g, "container": "t2/colmap-cudss:4.2.0"}, ws, None, 0)
+    assert flag(c["mapper"], "--GlobalMapper.ba_ceres_use_gpu") == "1" and flag(c["mapper"], "--GlobalMapper.gp_use_gpu") == "1"
+    assert c["feature"] == host["feature"] and c["match"] == host["match"]
+    c = build_commands({**g, "container": "x", "container_ba_use_gpu": False}, ws, None, 0)
+    assert flag(c["mapper"], "--GlobalMapper.ba_ceres_use_gpu") == "0"
+    c = build_commands({**g, "container": "x", "container_ba_use_gpu": None, "ba_use_gpu": True}, ws, None, 0)
+    assert flag(c["mapper"], "--GlobalMapper.ba_ceres_use_gpu") == "1"
+    c = build_commands({**g, "container": "x", "use_gpu": False}, ws, None, 0)
+    assert flag(c["mapper"], "--GlobalMapper.ba_ceres_use_gpu") == "0"
+    assert colmap_info("colmap", "no/such-image:0") == {"path": None, "version": None, "cuda": False}
+    # container_steps: default [mapper] -> only the mapper in the image; [all] / explicit lists
+    d = {**g, "container": "img"}
+    assert [image_for(d, st) for st in STEPS] == [None, None, "img", None]
+    assert all(image_for({**d, "container_steps": ["all"]}, st) == "img" for st in STEPS)
+    assert [image_for({**d, "container_steps": ["match", "export"]}, st) for st in STEPS] == [None, "img", None, "img"]
+    assert not any(image_for({**d, "container": None, "container_steps": ["all"]}, st) for st in STEPS)
+    c = build_commands({**d, "container_steps": ["feature"]}, ws, None, 0)  # mapper on the host: host BA flag
+    assert c == host
 
     # fixed with fx null -> estimate; PINHOLE -> 4 params; unsupported model -> estimate
     assert resolve_intrinsics(s, {"fx": None}, (10, 10)) is None

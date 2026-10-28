@@ -47,15 +47,23 @@
 #   Inputs (results/<run_id>/sfm/, MODEL units, unscaled): points3d.npy (P,3),
 #   obs.npy (O,4: point_idx, cam_idx, x, y), K.npy (3,3), dist.npy (4,) OPENCV
 #   k1,k2,p1,p2, cam_R.npy (N,3,3), cam_t.npy (N,3) world->camera. Optional:
-#   results/<run_id>/dense/<method>/points.npy and
-#   artifacts/<run_id>/floorplan.csv column area_m2.
+#   results/<run_id>/dense/<method>/points.npy (raw, every method present:
+#   patch_match, plane_sweep, sgm, casmvsnet, ..., vggt_omega, mapanything),
+#   results/<run_id>/clean/{sparse,<method>}/points.npy (after cleanup),
+#   artifacts/<run_id>/floorplan.csv column area_m2 (filled only with a cm
+#   scale) and artifacts/<run_id>/room_fill.csv polygon_area_m2/floor_area_m2.
 #   Outputs under results/<run_id>/evaluation/: reproj_errors.npy (O,), aligned
 #   with obs.npy rows (NaN for points behind the camera).
-#   One row in artifacts/<run_id>/evaluation.csv: reproj_mean_px,
-#   reproj_median_px, n_sparse, n_dense, density_pts_m2.
-#   n_dense = largest point count among dense methods (0 if none; each method
-#   logged as metric n_dense_<method>). density_pts_m2 = n_dense (n_sparse when
-#   there is no dense cloud) / area_m2; empty when area_m2 is missing.
+#   artifacts/<run_id>/evaluation.csv, key method: row 0 is the summary
+#   (method=all) with reproj_mean_px, reproj_median_px, n_sparse, n_dense,
+#   density_pts_m2, dense_method, n_dense_raw, n_dense_clean, n_sparse_clean,
+#   density_clean_pts_m2, density_sparse_pts_m2, area_m2, area_source; then
+#   one row per dense method (n_dense = n_dense_raw, n_dense_clean, densities).
+#   n_dense = largest raw point count among dense methods (0 if none; each
+#   method logged as metric n_dense_<method>). density_pts_m2 = n_dense
+#   (n_sparse when there is no dense cloud) / area_m2. Area order: floorplan
+#   area_m2 > room_fill polygon_area_m2 > room_fill floor_area_m2; densities
+#   empty when none exists (area_source records which one was used).
 #
 # Defaults (read from the YAML block evaluation, never hardcoded):
 #   enabled: false   (no new keys)
@@ -110,6 +118,34 @@ def reprojection_errors(points3d, obs, K, dist, cam_R, cam_t) -> np.ndarray:
 
     return np.linalg.norm(uv - obs[:, 2:4], axis=1)
 
+def floor_area(artifacts_dir) -> tuple[float, str]:
+    """(area_m2, source): floorplan.csv area_m2 (needs a cm scale) > room_fill.csv polygon_area_m2 >
+    room_fill.csv floor_area_m2; (nan, "") when none is a positive number."""
+
+    for name, cols in (("floorplan.csv", ("area_m2",)), ("room_fill.csv", ("polygon_area_m2", "floor_area_m2"))):
+        rows = stage_io.read_csv(Path(artifacts_dir) / name)
+        for col in cols:
+            for r in rows:
+                try:
+                    v = float(r.get(col) or "nan")
+                except ValueError:
+                    continue
+                if np.isfinite(v) and v > 0:
+                    return v, f"{name[:-4]}.{col}"
+
+    return float("nan"), ""
+
+def dense_methods(run_dir) -> list[str]:
+    """Every dense method with a cloud: <run_dir>/dense/*/points.npy (patch_match, plane_sweep, ...)."""
+
+    return sorted(p.parent.name for p in (Path(run_dir) / "dense").glob("*/points.npy"))
+
+def point_count(method_dir) -> int:
+
+    path = Path(method_dir) / "points.npy"
+
+    return len(np.load(path, mmap_mode="r")) if path.exists() else 0
+
 def run(cfg: dict, run_dir: str, artifacts_dir: str) -> dict | None:
 
     if not cfg["evaluation"]["enabled"]:
@@ -132,29 +168,40 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> dict | None:
     if len(valid) < len(errors):
         log.warning("reprojection: %d observations behind the camera (NaN)", len(errors) - len(valid))
 
-    n_dense = 0
-    for path in sorted((run_dir / "dense").glob("*/points.npy")):
-        n = len(np.load(path, mmap_mode="r"))
-        log.info("metric n_dense_%s=%s", path.parent.name, n)
-        n_dense = max(n_dense, n)
-
     n_sparse = len(points3d)
-    rows = stage_io.read_csv(artifacts_dir / "floorplan.csv")
-    try:
-        area_m2 = float(rows[-1]["area_m2"]) if rows else float("nan")
-    except (KeyError, ValueError):
-        area_m2 = float("nan")
-    if np.isfinite(area_m2) and area_m2 > 0:
-        density = (n_dense or n_sparse) / area_m2
+    area_m2, area_source = floor_area(artifacts_dir)
+    if area_source:
+        log.info("reprojection: floor area %.3f m2 from %s", area_m2, area_source)
     else:
-        log.warning("reprojection: floorplan area_m2 unavailable, density_pts_m2 left empty")
-        density = ""
+        log.warning("reprojection: no floor area (floorplan area_m2 and room_fill areas empty), "
+                    "density columns left empty")
+    density = lambda n: n / area_m2 if area_source and n else ""
+
+    per_method = []
+    for name in dense_methods(run_dir):
+        raw, clean = point_count(run_dir / "dense" / name), point_count(run_dir / "clean" / name)
+        log.info("metric n_dense_%s=%s", name, raw)
+        per_method.append({"method": name, "n_dense": raw, "n_dense_raw": raw, "n_dense_clean": clean,
+                           "density_pts_m2": density(raw), "density_clean_pts_m2": density(clean)})
+    best = max(per_method, key=lambda r: r["n_dense_raw"], default=None)
+    n_dense = best["n_dense_raw"] if best else 0
+    n_dense_clean = best["n_dense_clean"] if best else 0
+    n_sparse_clean = point_count(run_dir / "clean" / "sparse")
 
     row = {"reproj_mean_px": float(np.mean(valid)) if len(valid) else "",
            "reproj_median_px": float(np.median(valid)) if len(valid) else "",
-           "n_sparse": n_sparse, "n_dense": n_dense, "density_pts_m2": density}
+           "n_sparse": n_sparse, "n_dense": n_dense, "density_pts_m2": density(n_dense or n_sparse),
+           "method": "all", "dense_method": best["method"] if best else "",
+           "n_dense_raw": n_dense, "n_dense_clean": n_dense_clean, "n_sparse_clean": n_sparse_clean,
+           "density_clean_pts_m2": density(n_dense_clean), "density_sparse_pts_m2": density(n_sparse),
+           "area_m2": area_m2 if area_source else "", "area_source": area_source}
     stage_io.log_metrics(log, row)
-    stage_io.upsert_csv(artifacts_dir / "evaluation.csv", row)
+    stage_io.upsert_csv(artifacts_dir / "evaluation.csv", row)  # summary row first (ablation reads row 0)
+    for r in per_method:
+        r = {**dict.fromkeys(row, ""), **r, "n_sparse": n_sparse, "area_m2": row["area_m2"],
+             "area_source": area_source}
+        stage_io.log_metrics(log, {f"{r['method']}.{k}": v for k, v in r.items() if k.startswith(("n_dense", "dens"))})
+        stage_io.upsert_csv(artifacts_dir / "evaluation.csv", r, key="method")
 
     return row
 
@@ -235,6 +282,27 @@ if __name__ == "__main__":
         assert abs(row["reproj_median_px"] - np.sqrt(2 * np.log(2))) < 0.01
         assert row["n_dense"] == 123456 and abs(row["density_pts_m2"] - 123456 / 12.5) < 1e-9
         assert stage_io.read_csv(art / "evaluation.csv")[0]["n_dense"] == "123456"
+        rows = stage_io.read_csv(art / "evaluation.csv")
+        assert [r["method"] for r in rows] == ["all", "patch_match"] and rows[0]["area_source"] == "floorplan.area_m2"
+
+        # no cm scale: floorplan area empty -> room_fill polygon area; raw vs clean counts per method
+        stage_io.upsert_csv(art / "floorplan.csv", {"area_m2": ""})
+        stage_io.upsert_csv(art / "room_fill.csv", {"source": "patch_match", "polygon_area_m2": "",
+                                                    "floor_area_m2": 10.0}, key="source")
+        (run_dir / "dense" / "sgm").mkdir(parents=True)
+        np.save(run_dir / "dense" / "sgm" / "points.npy", np.zeros((2000, 3)))
+        for name, n in (("patch_match", 5000), ("sparse", 300)):
+            (run_dir / "clean" / name).mkdir(parents=True)
+            np.save(run_dir / "clean" / name / "points.npy", np.zeros((n, 3)))
+        row = run(cfg, str(run_dir), str(art))
+        assert row["area_source"] == "room_fill.floor_area_m2" and row["density_pts_m2"] == 123456 / 10
+        assert row["n_dense_clean"] == 5000 and row["density_clean_pts_m2"] == 500 and row["n_sparse_clean"] == 300
+        rows = {r["method"]: r for r in stage_io.read_csv(art / "evaluation.csv")}
+        assert list(rows) == ["all", "patch_match", "sgm"] and rows["sgm"]["n_dense_clean"] == "0"
+        assert float(rows["sgm"]["density_pts_m2"]) == 200 and rows["sgm"]["density_clean_pts_m2"] == ""
+        stage_io.upsert_csv(art / "room_fill.csv", {"source": "patch_match", "polygon_area_m2": "", "floor_area_m2": ""},
+                            key="source")
+        assert run(cfg, str(run_dir), str(art))["area_source"] == ""
         assert run({"evaluation": {"enabled": False}}, str(run_dir), str(art)) is None
 
     if os.environ.get("REPROJ_COLMAP") == "1":  # optional check on the reference model <repo>/colmap_gpu/

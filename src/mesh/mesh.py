@@ -24,7 +24,7 @@
 #      liepa -> mesh/liepa/mesh.ply (same fallback); poisson -> mesh/poisson/pre/mesh.ply. Scene: clean/<source>/{points,colors}.npy (source as in
 #      poisson.pick_source), scale/centers_cm.npy, sfm/{cam_R,K,image_names}.npy, one frame of
 #      cfg["extraction"]["output_dir"] (image size; falls back to 2*cx, 2*cy).
-# Out: exports/meshlab/mesh.{ply,obj,stl,off}, exports/meshlab/scene.obj, exports/web/{mesh,scene}.glb,
+# Out: exports/meshlab/mesh.{ply,obj,stl,off}, exports/meshlab/scene.obj, exports/web/{mesh,scene}.glb (metres when the scale is metric),
 #      mesh/{vertices,faces,colors}.npy; artifacts_dir/mesh.csv (source, input, n_vertices, n_faces,
 #      poisson_depth, t_s).
 # YAML: mesh: {enabled, input: close_holes|liepa|poisson, frustum_cm, frustum_every, trajectory_cm};
@@ -205,9 +205,10 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
             mesh.compute_triangle_normals()  # STL requires them; OBJ/OFF writers warn if present
         o3d.io.write_triangle_mesh(str(path), mesh, write_vertex_colors=path.suffix != ".stl")
 
+    glb_scale = 0.01 if stage_io.scale_info(run_dir)[1] == "cm" else 1.0  # glTF is in metres: cm -> m
     tmesh = trimesh.Trimesh(vertices, faces, vertex_colors=vcolors, process=False)
     files["glb"] = web / "mesh.glb"
-    tmesh.export(str(files["glb"]))
+    tmesh.copy().apply_scale(glb_scale).export(str(files["glb"]))
 
     # X1: scene with point cloud, trajectory and frustums
     cam_R_path, K_path = run_dir / "sfm" / "cam_R.npy", run_dir / "sfm" / "K.npy"
@@ -232,7 +233,7 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         log.warning("sfm/cam_R.npy, sfm/K.npy or camera centers missing: scene without cameras")
 
     files["scene_glb"] = web / "scene.glb"
-    scene.export(str(files["scene_glb"]))
+    scene.copy().apply_scale(glb_scale).export(str(files["scene_glb"]))
     files["scene_obj"] = meshlab / "scene.obj"
     write_scene_obj(files["scene_obj"], points, colors, f_verts, f_tris, f_edges, cams, tube)
     verify(files)

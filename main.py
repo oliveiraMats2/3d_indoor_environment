@@ -28,15 +28,16 @@ from src import detectores, epipolar, extrair_quadros, frame_quality, matching, 
 from src.constants import Config
 from src.matching import metrics as matching_metrics
 from src.matching import visualize as matching_visualize
-from src import stage_io, videos, viewer
+from src import flows, stage_io, videos, viewer
 from src.cloud import clean, floorplan, planes
 from src.dense import compare as dense_compare, openmvs, patch_match
+from src.dense import casmvsnet, mapanything, mvsnet, patchmatchnet, plane_sweep, sgm, vggt_omega
 from src.epipolar import two_view
-from src.evaluation import ablation, hard_regions, loop_drift, metric_error, reprojection
+from src.evaluation import ablation, hard_regions, lidar, loop_drift, metric_error, photo_vs_render, reprojection
 from src.export import meshlab
 from src.gs import gaussian_splatting
 from src.mesh import close_holes, liepa, mesh, poisson, room_fill
-from src.sfm import colmap, convert, instantsfm, mast3r_sfm, scale, vggt
+from src.sfm import colmap, convert, instantsfm, mast3r_sfm, scale, scale_outline, vggt
 
 log = logging.getLogger("main")
 
@@ -55,7 +56,7 @@ def main():
     config_arg = stage_io.config_arg("Whole pipeline driven by one YAML (one YAML = one experiment).")
     path = str(stage_io.enter_repo(config_arg, os.path.dirname(os.path.abspath(__file__))))  # cwd = repo root
     config_file = open(path)
-    raw = yaml.safe_load(config_file) or {}
+    raw = flows.apply(yaml.safe_load(config_file) or {})  # flow: cpu | gpu fills the sfm preset
     cfg = Config.model_validate(raw)
     config_path = Path(path)
     cfg = Config.model_validate(stage_io.resolve_paths(cfg.model_dump(), config_path))  # id, tag, <ws>/... paths
@@ -163,8 +164,13 @@ def main():
         stage("sfm", sfm_runs[cfg.sfm.technique], full_cfg, run_dir, artifacts_dir)
         stage("sfm_convert", convert.run, full_cfg, run_dir, artifacts_dir)
 
-    if cfg.scale.enabled:
-        stage("scale", scale.run, full_cfg, run_dir, artifacts_dir)
+    if cfg.scale.enabled:  # before cleanup: clean/planes/floorplan work in cm once the scale is metric
+        if cfg.scale.method == "outline":
+            stage("scale_outline", scale_outline.run, full_cfg, run_dir, artifacts_dir)
+        else:
+            stage("scale", scale.run, full_cfg, run_dir, artifacts_dir)
+            if cfg.scale.outline.fallback:  # aruco/manual left the scale unknown -> tape-measured outline
+                stage("scale_outline", scale_outline.run, full_cfg, run_dir, artifacts_dir)
 
     if cfg.cleanup.enabled:
         stage("cleanup_sparse", clean.run, full_cfg, run_dir, artifacts_dir, "sparse")
@@ -176,7 +182,9 @@ def main():
         stage("floorplan", floorplan.run, full_cfg, run_dir, artifacts_dir)
 
     if cfg.dense.enabled:
-        dense_runs = {"patch_match": patch_match.run, "openmvs": openmvs.run}
+        dense_runs = {"patch_match": patch_match.run, "openmvs": openmvs.run, "plane_sweep": plane_sweep.run,
+                      "sgm": sgm.run, "casmvsnet": casmvsnet.run, "mvsnet": mvsnet.run,
+                      "patchmatchnet": patchmatchnet.run, "vggt_omega": vggt_omega.run, "mapanything": mapanything.run}
         for method in cfg.dense.methods:
             stage(f"dense_{method}", dense_runs[method], full_cfg, run_dir, artifacts_dir)
 
@@ -208,6 +216,9 @@ def main():
     if cfg.export.enabled:
         stage("export", meshlab.run, full_cfg, run_dir, artifacts_dir)
 
+    if cfg.photo_vs_render.enabled:  # T2 4.B.3: real photo | mesh render | GS render at the same pose
+        stage("photo_vs_render", photo_vs_render.run, full_cfg, run_dir, artifacts_dir)
+
     if cfg.evaluation.enabled:
         stage("reprojection", reprojection.run, full_cfg, run_dir, artifacts_dir)
         stage("metric_error", metric_error.run, full_cfg, run_dir, artifacts_dir)
@@ -217,6 +228,9 @@ def main():
 
         if cfg.evaluation.ablation_runs:
             stage("ablation", ablation.run, full_cfg, run_dir, artifacts_dir)
+
+    if cfg.lidar.path:  # real LiDAR map = ground truth: alignment, accuracy/completeness, LiDAR mesh
+        stage("lidar", lidar.run, full_cfg, run_dir, artifacts_dir)
 
     if cfg.viewer.enabled:  # before videos: videos.csv then lists navigation_<cloud>_<s>s.mp4
         stage("viewer", viewer.run_safe, full_cfg, run_dir)

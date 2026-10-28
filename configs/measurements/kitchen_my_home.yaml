@@ -1,0 +1,27 @@
+# =============================================================================
+# kitchen_my_home measurements (versioned copy of kitchen_my_home/medidas/medidas.yaml, git-ignored)
+#   source  : iPhone Measure app along the ceiling molding, kitchen_my_home.MOV scene
+#   photos  : kitchen_my_home/medidas/imagem_medidas_1_janela_pia.jpg   (janela 2,73 m; pia_fogao 4,29 m)
+#             kitchen_my_home/medidas/imagem_medidas_2_porta.jpg        (porta_lado_pia 1,92 m; porta 1,23 m; geladeiras 3,32 m)
+#             kitchen_my_home/medidas/imagem_medidas_3_geladeiras.jpg   (geladeiras 3,32 m; janela 2,73 m)
+#             kitchen_my_home/medidas/imagem_medidas_4_pia.jpg          (janela 2,73 m; pia_fogao 4,29 m)
+#   ocr     : python -m src.measurements.ocr kitchen_my_home/medidas <out.json> reproduces every label above
+# =============================================================================
+# Walls, in order along the ceiling outline (cm):
+paredes_cm:
+  janela: 273          # window wall (between the fridges and the sink)
+  pia_fogao: 429       # sink / stove wall
+  porta_lado_pia: 192  # wall between the sink and the door chamfer
+  porta: 123           # short door wall (chamfered, ~135 deg with its neighbours)
+  geladeiras: 332      # fridges wall
+# Room outline on the floor/ceiling plane (cm), counter-clockwise, origin at the janela/geladeiras corner,
+# x along the window wall, y along the fridges wall. The porta/porta_lado_pia corner is solved from the two
+# measurements (192 and 123); the porta_lado_pia wall is 1.3 deg off parallel to the window wall.
+contorno_cm:
+  - [0.0, 0.0]       # janela / geladeiras corner
+  - [273.0, 0.0]     # janela / pia corner
+  - [273.0, 429.0]   # pia / porta_lado_pia corner
+  - [81.1, 424.5]    # porta_lado_pia / porta corner
+  - [0.0, 332.0]     # porta / geladeiras corner
+area_m2: 11.26
+pe_direito_cm: null  # not measured: comes from the reconstruction once scaled

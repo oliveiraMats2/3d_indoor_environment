@@ -32,7 +32,7 @@
 #      scale comparison, ceiling height cm, polygon area m2, per surface area/filled m2 and filled fraction,
 #      n_vertices, n_faces, t_s), every value also logged as `metric name=value`.
 # YAML: room_fill: {enabled, footprint_cm: [[x, y], ...], ceiling_height_cm: null, surfaces: [floor, ceiling],
-#       source: patch_match, grid_cm, max_gap_cm, fit_rotations}
+#       source: patch_match, grid_cm, max_gap_cm, fit_rotations, device: CPU:0}
 # Rules:
 # - Floor frame: p' = T_floor p (z up, floor at z = 0). Wall points = planes labels >= 2 when labels.npy is
 #   aligned with the source cloud and holds >= MIN_WALL_POINTS, else points between 20% and 80% of the robust
@@ -52,6 +52,9 @@
 #   whose centre lies within max_gap_cm of the source cloud or of the selected mesh vertices is covered and
 #   dropped; the others become 2 triangles each (lattice vertices shared). Colour = median colour of the
 #   source points of that surface (labels, else points within max_gap_cm of it), else neutral gray.
+# - Coverage distances run on room_fill.device (CPU:0 default: on the kitchen the KD-tree is ~2x faster than the
+#   GPU; auto/CUDA:0 -> open3d.core.nns in float64, same distances as the CPU KD-tree; any failure -> CPU
+#   KD-tree; the CUDA cache is released after).
 # - Outputs in the model frame and working units (inverse of T_floor). Nothing to fill -> WARNING, no
 #   room_fill.ply, room_scene.ply = selected mesh. Never crashes main.py on missing inputs.
 # >>> BEGIN IMPLEMENTATION >>>
@@ -63,6 +66,7 @@ import numpy as np
 import open3d as o3d
 
 from src import stage_io
+from src.cloud.clean import release_cuda, resolve_device
 from src.mesh import mesh as mesh_stage
 
 log = logging.getLogger(__name__)
@@ -271,12 +275,38 @@ def wall_cells(poly: np.ndarray, height: float, grid: float) -> list[tuple[np.nd
 
     return walls
 
-def nearest_distance(queries: np.ndarray, targets: list[np.ndarray]) -> np.ndarray:
-    """Distance of each query to the nearest point of any target cloud (Open3D KD-tree)."""
+def nearest_distance_tensor(queries: np.ndarray, targets: list[np.ndarray], device: str) -> np.ndarray:
+    """nearest_distance with open3d.core.nns (1-NN, float64) on an Open3D device."""
+
+    dev = o3d.core.Device(device)
+    best = np.full(len(queries), np.inf)
+    q = o3d.core.Tensor(np.ascontiguousarray(queries, dtype=np.float64), device=dev)
+    for pts in targets:
+        if pts is not None and len(pts):
+            nns = o3d.core.nns.NearestNeighborSearch(
+                o3d.core.Tensor(np.ascontiguousarray(pts, dtype=np.float64), device=dev))
+            nns.knn_index()
+            _, d2 = nns.knn_search(q, 1)
+            best = np.minimum(best, np.sqrt(np.maximum(d2.cpu().numpy().reshape(-1), 0.0)))
+
+    return best
+
+def nearest_distance(queries: np.ndarray, targets: list[np.ndarray], device: str = "CPU:0") -> np.ndarray:
+    """Distance of each query to the nearest point of any target cloud (Open3D KD-tree; device CUDA:n or auto
+    -> open3d.core.nns on the GPU, CPU fallback)."""
 
     best = np.full(len(queries), np.inf)
     if len(queries) == 0:
         return best
+
+    device = resolve_device(device, "room_fill")
+    if device.startswith("CUDA"):
+        try:
+            return nearest_distance_tensor(queries, targets, device)
+        except Exception as exc:  # noqa: BLE001 - any device failure falls back to the CPU KD-tree
+            log.warning("room_fill: nearest distance on %s failed (%s), using the CPU KD-tree", device, exc)
+        finally:
+            release_cuda()
 
     qp = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(queries))
     for pts in targets:
@@ -418,7 +448,7 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         items += [(surf, *cell, color) for cell in cells]
 
     centres_all = np.vstack([to_floor(c[:, :2], c[:, 2]) for _, _, _, c, _, _ in items])
-    covered_all = nearest_distance(centres_all, targets) < gap   # one KD-tree per target cloud
+    covered_all = nearest_distance(centres_all, targets, rcfg.get("device", "CPU:0")) < gap  # one search per target
     parts, totals, start = [], {surf: [0.0, 0.0] for surf in surfaces}, 0
     for surf, nodes, quads, centres, cell_area, color in items:
         covered = covered_all[start:start + len(centres)]
@@ -631,6 +661,13 @@ if __name__ == "__main__":
         out2 = run(default_cfg(footprint_cm=(KITCHEN_CM * [-1, 1]).tolist()), str(run_dir), str(art))
         row2 = stage_io.read_csv(art / "room_fill.csv")[0]
         assert out2 is not None and row2["mirrored"] == "True" and abs(float(row2["s_units_per_cm"]) / truth["s"] - 1) < 0.02
+        # coverage distances: GPU (open3d.core.nns) == CPU KD-tree on the same queries/targets
+        rng = np.random.default_rng(1)
+        qs, tg = rng.uniform(0, 500, (20000, 3)), [rng.uniform(0, 500, (300000, 3)), rng.uniform(0, 500, (5000, 3))]
+        d_cpu, d_gpu = nearest_distance(qs, tg, "CPU:0"), nearest_distance(qs, tg, "auto")
+        assert np.allclose(d_cpu, d_gpu, rtol=0, atol=1e-6) and np.array_equal(d_cpu < 5, d_gpu < 5), \
+            np.abs(d_cpu - d_gpu).max()
+        print("nearest_distance CPU vs", resolve_device("auto"), "max |diff|", np.abs(d_cpu - d_gpu).max())
         shutil.rmtree(run_dir / "planes")
         assert run(default_cfg(), str(run_dir), str(art)) is None                         # no planes -> None
     print("OK")

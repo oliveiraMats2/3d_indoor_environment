@@ -130,7 +130,7 @@ def run(cfg: dict, run_dir: str, frames_dir: str, artifacts_dir: str) -> Path:
 # <<< END IMPLEMENTATION <<<
 
 if __name__ == "__main__":
-    import tempfile, inspect, sys
+    import tempfile
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -170,7 +170,7 @@ if __name__ == "__main__":
                              "intrinsics": {"fx": None, "fy": None, "cx": None, "cy": None}},
                 "visualize": {"epilines": {"n_lines": 20, "dpi": 150}}}
 
-    def _check(tmp: Path, real: bool) -> None:
+    def _check(tmp: Path) -> None:
         root, frames, art = tmp / "run", tmp / "frames", tmp / "art"
         _synthetic(root, frames, 0)
         csv_path = run(_cfg(), str(root), str(frames), str(art))
@@ -181,53 +181,18 @@ if __name__ == "__main__":
         assert 150 <= int(r["n_inliers"]) <= 200, r
         assert int(r["n_points3d"]) > 0 and np.isfinite(float(r["rot_deg"])), r
         pair_dir = root / "epipolar" / "sift" / "img_0000__img_0001"
-        if real:
-            assert abs(float(r["rot_deg"]) - np.degrees(0.08)) < 1.0, r
-            assert float(r["t_x"]) < -0.9, r  # t direction ~ (-1, 0, 0)
-            for f in ("R", "t", "pose_mask", "points3d", "colors"):
-                assert (pair_dir / f"{f}.npy").exists(), f
-            assert (pair_dir / "cloud.ply").exists()
-            assert (root / "figures" / "epilines" / "sift" / "img_0000__img_0001.png").exists()
+        assert abs(float(r["rot_deg"]) - np.degrees(0.08)) < 1.0, r
+        assert float(r["t_x"]) < -0.9, r  # t direction ~ (-1, 0, 0)
+        for f in ("R", "t", "pose_mask", "points3d", "colors"):
+            assert (pair_dir / f"{f}.npy").exists(), f
+        assert (pair_dir / "cloud.ply").exists()
+        assert (root / "figures" / "epilines" / "sift" / "img_0000__img_0001.png").exists()
         # rerun rewrites the CSV (no duplicates)
         run(_cfg(), str(root), str(frames), str(art))
         assert len(stage_io.read_csv(csv_path)) == 1
         assert run({**_cfg(), "geometry": {"enabled": False}}, str(root), str(frames), str(art)) == csv_path
 
-    # 1) stubbed modules: tests the wiring alone
-    def _pose_stub(cfg, run_dir, pair_dir, E, pts1, pts2, K, inlier_mask):
-        assert pts1.shape == pts2.shape == (len(inlier_mask), 2)
-        _, R, t, m = cv2.recoverPose(E, pts1.astype(np.float64), pts2.astype(np.float64), K,
-                                     mask=inlier_mask.astype(np.uint8).copy())
-        np.save(pair_dir / "R.npy", R); np.save(pair_dir / "t.npy", t)
-        np.save(pair_dir / "pose_mask.npy", m.ravel() > 0)
-        return {"rot_deg": float(np.degrees(np.linalg.norm(cv2.Rodrigues(R)[0]))), "t_x": float(t[0, 0]),
-                "t_y": float(t[1, 0]), "t_z": float(t[2, 0]), "n_pose_inliers": int((m > 0).sum())}
-
-    def _tri_stub(cfg, run_dir, pair_dir, K, R, t, pts1, pts2, mask, image1_bgr):
-        assert mask.dtype == bool and image1_bgr.ndim == 3
-        return {"n_points3d": int(mask.sum()), "parallax_med_deg": 1.0, "cheirality_frac": 1.0}
-
-    def _vis_stub(cfg, run_dir, out_path, image1_bgr, image2_bgr, F, pts1, pts2, mask, seed):
-        assert set(cfg) == {"n_lines", "dpi"} and isinstance(seed, int)
-        return None
-
-    saved = {m: getattr(m, "run", None) for m in (pose, triangulate, visualize)}
-    pose.run, triangulate.run, visualize.run = _pose_stub, _tri_stub, _vis_stub
+    # real integration test: pose -> triangulate -> visualize on a synthetic pair
     with tempfile.TemporaryDirectory() as tmp:
-        _check(Path(tmp), real=False)
-    for m, fn in saved.items():
-        if fn is None:
-            delattr(m, "run")
-        else:
-            m.run = fn
-    print("stub test OK")
-
-    # 2) real integration test when the three modules are implemented
-    implemented = all("def run" in inspect.getsource(m) for m in (pose, triangulate, visualize))
-    if implemented:
-        with tempfile.TemporaryDirectory() as tmp:
-            _check(Path(tmp), real=True)
-        print("integration test OK")
-    else:
-        print("integration test SKIPPED: pose/triangulate/visualize not implemented yet", file=sys.stderr)
+        _check(Path(tmp))
     print("OK")

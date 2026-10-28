@@ -17,23 +17,28 @@
 # ╚══════════════════════════════════════════════════════════════════════════════════════╝
 
 # PROMPT COMPLEMENT
-# Stage: 4, dense MVS, alternative method (OpenMVS).
+# Stage: 4, dense MVS, alternative method (OpenMVS, CUDA PatchMatch).
 # Goal: densify the COLMAP SfM model with OpenMVS (InterfaceCOLMAP -> DensifyPointCloud) and store
 #   the cloud in the same layout as the COLMAP patch-match method, so dense_compare/cleanup/mesh can use it.
-# In:  <run_dir>/dense/patch_match/ws/ (undistorted COLMAP workspace, reused when present), else
-#      <run_dir>/exports/colmap/{images,sparse/0} undistorted here with `colmap image_undistorter`;
-#      <frames_dir>/mvs_exclude.txt (one frame name per line, with or without extension).
+# In:  undistorted COLMAP workspace {images,sparse}: <run_dir>/dense/undistorted (shared with depth_fusion),
+#      else <run_dir>/dense/patch_match/ws, else dense/undistorted built by depth_fusion.undistorted_workspace;
+#      <frames_dir>/mvs_exclude.txt and dense.ref_step (same references as patch_match).
 # Out: <run_dir>/dense/openmvs/{fused.ply,points.npy,colors.npy} (model units, COLMAP frame),
-#      workspace <run_dir>/dense/openmvs/{undistorted/,mvs_in/,scene.mvs,scene_dense.*,openmvs.log};
-#      row method=openmvs in <artifacts_dir>/dense_metrics.csv (n_dense, t_s, max_image_size).
-# YAML (block dense): enabled, methods (must contain openmvs), max_image_size,
-#      openmvs: {bin_dir: null (PATH), resolution_level: 1, number_views: 5, max_threads: 0 (all cores)}.
-#      COLMAP binary from sfm.colmap_bin.
-# Version assumptions: OpenMVS 2.x (tested option names of 2.0-2.3): InterfaceCOLMAP -i/-o/--image-folder,
-#      DensifyPointCloud -i/-o/-w/--resolution-level/--number-views/--max-threads. The model is handed to
-#      InterfaceCOLMAP as TXT (sparse/*.txt), which every 1.x/2.x release reads; COLMAP 3.x/4.x CLI.
-# Rules: missing binaries or a failing tool -> WARNING and return None (no CSV row, never raise).
-#      Excluded frames are removed from the model with `colmap image_deleter` before OpenMVS.
+#      workspace <run_dir>/dense/openmvs/{mvs_in/,scene.mvs,scene_dense.*,openmvs.log};
+#      row method=openmvs in <artifacts_dir>/dense_metrics.csv (depth_fusion.base_row columns).
+# YAML (block dense): enabled, methods (must contain openmvs), max_image_size, ref_step, rerun,
+#      openmvs: {bin_dir: null (PATH), container: null (docker image tag, e.g. t2/openmvs:2.4.0, built from
+#      docker/openmvs/Dockerfile; wins over bin_dir), resolution_level: 1, number_views: 5, max_threads: 0
+#      (all cores), cuda_device: -1 (best GPU, -2 = CPU), remove_dmaps: true (drop the ~9 MB/image .dmap)}. COLMAP binary from sfm.colmap_bin.
+# Version assumptions: OpenMVS 2.x (option names checked on 2.4.0): InterfaceCOLMAP -i/-o/--image-folder,
+#      DensifyPointCloud -i/-o/-w/--resolution-level/--number-views/--max-threads/--cuda-device/--remove-dmaps;
+#      2.4 writes per-vertex view lists in scene_dense.ply (read through open3d). The model is
+#      handed to InterfaceCOLMAP as TXT (sparse/*.txt); COLMAP 3.x/4.x CLI.
+# Rules: missing binaries/image or a failing tool -> WARNING and return None (no CSV row, never raise).
+#      OpenMVS estimates a depth map for every image of its model, so the model keeps only the references
+#      (mvs_exclude.txt + ref_step) and, when ref_step > 1, their best covisible sources; the rest is removed
+#      with `colmap image_deleter`. Docker: run dir and the resolved image folder mounted at the same path,
+#      --gpus all, --user uid:gid.
 
 # >>> BEGIN IMPLEMENTATION >>>
 
@@ -43,11 +48,16 @@ from pathlib import Path
 import numpy as np
 
 from src import stage_io
+from src.dense import depth_fusion
 
 log = logging.getLogger(__name__)
 
+METHOD = "openmvs"
 OPENMVS_TOOLS = ("InterfaceCOLMAP", "DensifyPointCloud")
-INSTALL_HINT = ("OpenMVS has no conda-forge/brew package: build it from "
+DEFAULTS = {"bin_dir": None, "container": None, "resolution_level": 1, "number_views": 5, "max_threads": 0,
+            "cuda_device": -1, "remove_dmaps": True}
+INSTALL_HINT = ("OpenMVS has no conda-forge/brew package: build the image with `docker build -t "
+                "t2/openmvs:2.4.0 docker/openmvs` and set dense.openmvs.container, or build it from "
                 "https://github.com/cdcseacave/openMVS/wiki/Building and set dense.openmvs.bin_dir or PATH")
 
 PLY_TYPES = {"char": "i1", "int8": "i1", "uchar": "u1", "uint8": "u1", "short": "i2", "int16": "i2",
@@ -62,23 +72,57 @@ def find_tool(name: str, bin_dir: str | None) -> str | None:
 
     return shutil.which(name)
 
-def build_commands(tools: dict, mvs_in: Path, work: Path, ocfg: dict) -> dict:
-    """OpenMVS command lines (lists) for a COLMAP undistorted folder mvs_in = {images/, sparse/*.txt}."""
+def container_ready(image: str) -> bool:
+    """docker on PATH and the image present locally (never pulled implicitly)."""
+
+    if shutil.which("docker") is None:
+        log.warning("dense.openmvs.container=%s but docker is not on PATH", image)
+        return False
+    rc = subprocess.run(["docker", "image", "inspect", image], stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL).returncode
+    if rc != 0:
+        log.warning("docker image %s not found locally", image)
+    return rc == 0
+
+def mount_dirs(paths: list[Path]) -> list[Path]:
+    """Resolved, de-duplicated host dirs to mount (a dir already inside another mount is dropped)."""
+
+    dirs = sorted({Path(os.path.realpath(p)) for p in paths}, key=lambda p: (len(p.parts), str(p)))
+    out = []
+    for d in dirs:
+        if not any(d == m or m in d.parents for m in out):
+            out.append(d)
+    return out
+
+def docker_prefix(image: str, rw: list[Path], ro: list[Path], workdir: Path) -> list[str]:
+    """`docker run` prefix: GPU, caller uid:gid, every dir mounted at its own path (ro ones read-only)."""
+
+    cmd = ["docker", "run", "--rm", "--gpus", "all", "--user", f"{os.getuid()}:{os.getgid()}",
+           "--ipc=host", "-e", "HOME=/tmp"]
+    rw_dirs = mount_dirs(rw)
+    for d in rw_dirs:
+        cmd += ["-v", f"{d}:{d}"]
+    for d in mount_dirs(ro):
+        if not any(d == m or m in d.parents for m in rw_dirs):
+            cmd += ["-v", f"{d}:{d}:ro"]
+    return cmd + ["-w", str(workdir), image]
+
+def build_commands(tools: dict, mvs_in: Path, work: Path, ocfg: dict, prefix: list[str] | None = None) -> dict:
+    """OpenMVS command lines (lists) for a COLMAP undistorted folder mvs_in = {images/, sparse/*.txt};
+    prefix (docker run ... image) is prepended when the tools run in a container."""
 
     scene, dense = work / "scene.mvs", work / "scene_dense.mvs"
+    pre = list(prefix or [])
     return {
-        "interface": [tools["InterfaceCOLMAP"], "-i", str(mvs_in), "-o", str(scene),
-                      "--image-folder", str(mvs_in / "images"), "-w", str(work)],
-        "densify": [tools["DensifyPointCloud"], "-i", str(scene), "-o", str(dense), "-w", str(work),
-                    "--resolution-level", str(int(ocfg["resolution_level"])),
-                    "--number-views", str(int(ocfg["number_views"])),
-                    "--max-threads", str(int(ocfg["max_threads"]))],
+        "interface": pre + [tools["InterfaceCOLMAP"], "-i", str(mvs_in), "-o", str(scene),
+                            "--image-folder", str(mvs_in / "images"), "-w", str(work)],
+        "densify": pre + [tools["DensifyPointCloud"], "-i", str(scene), "-o", str(dense), "-w", str(work),
+                          "--resolution-level", str(int(ocfg["resolution_level"])),
+                          "--number-views", str(int(ocfg["number_views"])),
+                          "--max-threads", str(int(ocfg["max_threads"])),
+                          "--cuda-device", str(int(ocfg["cuda_device"])),
+                          "--remove-dmaps", str(int(bool(ocfg["remove_dmaps"])))],
     }
-
-def undistort_command(colmap: str, image_dir: Path, sparse_dir: Path, out: Path, max_size: int) -> list:
-
-    return [colmap, "image_undistorter", "--image_path", str(image_dir), "--input_path", str(sparse_dir),
-            "--output_path", str(out), "--output_type", "COLMAP", "--max_image_size", str(int(max_size))]
 
 def call(cmd: list, log_path: Path, cwd: Path) -> bool:
 
@@ -89,7 +133,8 @@ def call(cmd: list, log_path: Path, cwd: Path) -> bool:
         rc = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=cwd).returncode
 
     if rc != 0:
-        log.warning("%s failed (exit %d), see %s", Path(cmd[0]).name, rc, log_path)
+        tool = next((Path(c).name for c in cmd if Path(c).name in OPENMVS_TOOLS), Path(cmd[0]).name)
+        log.warning("%s failed (exit %d), see %s", tool, rc, log_path)
 
     return rc == 0
 
@@ -138,15 +183,6 @@ def read_ply(path) -> tuple[np.ndarray, np.ndarray | None]:
 
     return points, colors
 
-def excluded_names(frames_dir: Path, model_names: list[str]) -> list[str]:
-    """Model image names whose stem is listed in mvs_exclude.txt."""
-
-    path = frames_dir / "mvs_exclude.txt"
-    if not path.exists():
-        return []
-
-    stems = {Path(line.strip()).stem for line in path.read_text().splitlines() if line.strip()}
-    return [name for name in model_names if Path(name).stem in stems]
 
 def model_image_names(images_txt: Path) -> list[str]:
 
@@ -154,8 +190,49 @@ def model_image_names(images_txt: Path) -> list[str]:
 
     return [line.split()[9] for line in lines[::2] if line.strip()]
 
-def prepare_input(colmap: str, src_ws: Path, mvs_in: Path, frames_dir: Path, log_path: Path) -> bool:
-    """mvs_in = {images -> src_ws/images, sparse/*.txt without the excluded frames}."""
+def covisible_sources(sparse_dir, refs: list[str], allowed: set[str], k: int) -> set[str]:
+    """Top-k sources of every reference among `allowed`: shared 3D points weighted by a 5 deg
+    triangulation-angle prior (same ranking as depth_fusion.load_views, computed for the references only)."""
+
+    import pycolmap
+    from collections import Counter
+
+    rec = pycolmap.Reconstruction(str(sparse_dir))
+    names = {i: im.name for i, im in rec.images.items()}
+    by_name = {im.name: im for im in rec.images.values()}
+    xyz = {pid: p.xyz for pid, p in rec.points3D.items()}
+    track = {pid: {names[e.image_id] for e in p.track.elements} for pid, p in rec.points3D.items()}
+    obs = {}
+    out = set()
+    for ref in refs:
+        im = by_name[ref]
+        obs[ref] = {p.point3D_id for p in im.points2D if p.has_point3D()}
+        shared = Counter(o for pid in obs[ref] for o in track[pid] if o != ref and o in allowed)
+        c_ref = im.projection_center()
+        scores = []
+        for other, n in shared.most_common(3 * k):
+            pids = obs[ref] & {p.point3D_id for p in by_name[other].points2D if p.has_point3D()}
+            angle = depth_fusion._angle_deg(c_ref, by_name[other].projection_center(), xyz, pids)
+            scores.append((n * np.exp(-((angle - 5.0) ** 2) / (2 * (1.0 if angle < 5 else 10.0) ** 2)), other))
+        out |= {o for _, o in sorted(scores, reverse=True)[:k]}
+    return out
+
+def select_images(cfg: dict, ws: Path, k: int) -> tuple[list[str], set[str], int]:
+    """(references, images kept in the OpenMVS model, n excluded by mvs_exclude.txt)."""
+
+    from src.dense import patch_match
+
+    names = patch_match.registered_names(ws / "sparse")
+    refs = depth_fusion.references(cfg, ws)
+    excluded = patch_match.read_exclude(cfg["extraction"]["output_dir"])
+    allowed = {n for n in names if Path(n).stem not in excluded}
+    keep = set(refs)
+    if int(cfg["dense"].get("ref_step", 1)) > 1 and refs:
+        keep |= covisible_sources(ws / "sparse", refs, allowed, k)
+    return refs, keep, len(names) - len(allowed)
+
+def prepare_input(colmap: str, src_ws: Path, mvs_in: Path, keep: set[str], log_path: Path) -> bool:
+    """mvs_in = {images -> src_ws/images, sparse/*.txt restricted to the `keep` images}."""
 
     src_ws, mvs_in = src_ws.resolve(), mvs_in.resolve()
 
@@ -170,13 +247,11 @@ def prepare_input(colmap: str, src_ws: Path, mvs_in: Path, frames_dir: Path, log
     if not call(convert, log_path, mvs_in):
         return False
 
-    drop = excluded_names(frames_dir, model_image_names(sparse / "images.txt"))
-    if not (frames_dir / "mvs_exclude.txt").exists():
-        log.warning("no mvs_exclude.txt in %s: OpenMVS uses every registered image", frames_dir)
+    drop = [n for n in model_image_names(sparse / "images.txt") if n not in keep]
     if not drop:
         return True
 
-    log.info("excluding %d images from OpenMVS (mvs_exclude.txt)", len(drop))
+    log.info("removing %d images from the OpenMVS model (mvs_exclude.txt / ref_step)", len(drop))
     names_file, deleted = mvs_in / "exclude_names.txt", mvs_in / "sparse_deleted"
     names_file.write_text("\n".join(drop) + "\n")
     deleted.mkdir()
@@ -191,20 +266,47 @@ def prepare_input(colmap: str, src_ws: Path, mvs_in: Path, frames_dir: Path, log
                "--output_type", "TXT"]
     return call(convert, log_path, mvs_in)
 
-def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
+def source_workspace(cfg: dict, run_path: Path) -> Path | None:
+    """Undistorted {images,sparse}: shared dense/undistorted, else patch_match/ws, else build the shared one."""
 
-    dcfg = cfg["dense"]
-    if not dcfg["enabled"] or "openmvs" not in dcfg["methods"]:
-        log.info("dense openmvs disabled")
-        return None
+    for ws in (run_path / "dense" / depth_fusion.UNDISTORTED, run_path / "dense" / "patch_match" / "ws"):
+        if (ws / "images").is_dir() and (ws / "sparse").is_dir():
+            log.info("reusing undistorted workspace %s", ws)
+            return ws
+    return depth_fusion.undistorted_workspace(cfg, run_path)
 
-    ocfg = dcfg["openmvs"]
+def resolve_tools(ocfg: dict) -> tuple[dict, str | None] | None:
+    """({tool: path or name in the image}, image or None); None when OpenMVS is unavailable."""
+
+    if ocfg["container"]:
+        if not container_ready(ocfg["container"]):
+            log.warning("skipping openmvs; %s", INSTALL_HINT)
+            return None
+        return {name: name for name in OPENMVS_TOOLS}, ocfg["container"]
+
     tools = {name: find_tool(name, ocfg["bin_dir"]) for name in OPENMVS_TOOLS}
     missing = [name for name, path in tools.items() if path is None]
     if missing:
         log.warning("OpenMVS not found (%s, bin_dir=%s): skipping openmvs; %s",
                     ", ".join(missing), ocfg["bin_dir"], INSTALL_HINT)
         return None
+    return tools, None
+
+def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
+
+    if not depth_fusion.enabled(cfg, METHOD):
+        return None
+
+    dcfg = cfg["dense"]
+    ocfg = depth_fusion.method_cfg(cfg, METHOD, DEFAULTS)
+    row = {**depth_fusion.base_row(cfg, METHOD), "backend": "docker" if ocfg["container"] else "native"}
+    if not dcfg.get("rerun", True) and (out := depth_fusion.reuse(cfg, run_dir, artifacts_dir, METHOD, row)):
+        return out
+
+    resolved = resolve_tools(ocfg)
+    if resolved is None:
+        return None
+    tools, image = resolved
 
     colmap = shutil.which(cfg["sfm"]["colmap_bin"])
     if colmap is None:
@@ -212,33 +314,38 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         return None
 
     run_path = Path(run_dir).resolve()
-    work = run_path / "dense" / "openmvs"
+    t0 = time.perf_counter()
+    with depth_fusion.Timer() as tu:
+        src_ws = source_workspace(cfg, run_path)
+    if src_ws is None:
+        log.warning("no undistorted workspace: skipping openmvs")
+        return None
+
+    work = run_path / "dense" / METHOD
     work.mkdir(parents=True, exist_ok=True)
     log_path = work / "openmvs.log"
     log_path.write_text("")
-    t0 = time.perf_counter()
 
-    src_ws = run_path / "dense" / "patch_match" / "ws"
-    if (src_ws / "images").is_dir() and (src_ws / "sparse").is_dir():
-        log.info("reusing undistorted workspace %s", src_ws)
-    else:
-        colmap_ws = run_path / "exports" / "colmap"
-        if not (colmap_ws / "sparse" / "0").is_dir():
-            log.warning("no SfM model in %s: skipping openmvs", colmap_ws / "sparse" / "0")
-            return None
-        src_ws = work / "undistorted"
-        cmd = undistort_command(colmap, colmap_ws / "images", colmap_ws / "sparse" / "0", src_ws,
-                                dcfg["max_image_size"])
-        if not call(cmd, log_path, work):
-            return None
+    k = int(ocfg["number_views"]) or depth_fusion.N_SOURCES
+    refs, keep, n_excluded = select_images(cfg, src_ws, k)
+    if not refs:
+        log.warning("openmvs: no reference images left after mvs_exclude/ref_step")
+        return None
+    log.info("openmvs: %d references, %d images in the OpenMVS model", len(refs), len(keep))
 
-    frames_dir = Path(cfg["extraction"]["output_dir"]).resolve()
     mvs_in = work / "mvs_in"
-    if not prepare_input(colmap, src_ws, mvs_in, frames_dir, log_path):
+    if not prepare_input(colmap, src_ws, mvs_in, keep, log_path):
         return None
 
-    cmds = build_commands(tools, mvs_in, work, ocfg)
-    if not call(cmds["interface"], log_path, work) or not call(cmds["densify"], log_path, work):
+    prefix = None
+    if image:
+        prefix = docker_prefix(image, [run_path], [src_ws / "images"], work)
+    cmds = build_commands(tools, mvs_in, work, ocfg, prefix)
+    if not call(cmds["interface"], log_path, work):
+        return None
+    with depth_fusion.Timer() as td:
+        ok = call(cmds["densify"], log_path, work)
+    if not ok:
         return None
 
     dense_ply = work / "scene_dense.ply"
@@ -246,7 +353,11 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         log.warning("OpenMVS produced no %s, see %s", dense_ply, log_path)
         return None
 
-    points, colors = read_ply(dense_ply)
+    try:
+        points, colors = read_ply(dense_ply)
+    except ValueError:  # vertex list properties (view_indices/view_weights, OpenMVS >= 2.4)
+        from src.dense import patch_match
+        points, colors = patch_match.load_ply(dense_ply)
     if colors is None:
         log.warning("OpenMVS cloud has no colors: writing gray")
         colors = np.full((len(points), 3), 128, np.uint8)
@@ -256,8 +367,8 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
     np.save(work / "points.npy", points)
     np.save(work / "colors.npy", colors)
 
-    row = {"method": "openmvs", "n_dense": len(points), "t_s": round(time.perf_counter() - t0, 2),
-           "max_image_size": dcfg["max_image_size"]}
+    row.update(n_dense=len(points), t_s=round(time.perf_counter() - t0, 2), t_undistort_s=round(tu.s, 2),
+               t_depth_s=round(td.s, 2), n_ref_images=len(keep), n_excluded=n_excluded)
     stage_io.log_metrics(log, row)
     stage_io.upsert_csv(Path(artifacts_dir) / "dense_metrics.csv", row, key="method")
 
@@ -269,12 +380,12 @@ if __name__ == "__main__":
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        ocfg = {"bin_dir": str(tmp / "nobin"), "resolution_level": 1, "number_views": 5, "max_threads": 0}
-        cfg = {"dense": {"enabled": True, "methods": ["patch_match", "openmvs"], "max_image_size": 1600,
-                         "openmvs": ocfg},
+        ocfg = {**DEFAULTS, "bin_dir": str(tmp / "nobin")}
+        cfg = {"dense": {"enabled": True, "rerun": True, "methods": ["patch_match", "openmvs"],
+                         "max_image_size": 1600, "openmvs": ocfg},
                "sfm": {"colmap_bin": "colmap"}, "extraction": {"output_dir": str(tmp / "frames")}}
 
-        # command building
+        # command building (native and docker)
         tools = {"InterfaceCOLMAP": "/b/InterfaceCOLMAP", "DensifyPointCloud": "/b/DensifyPointCloud"}
         cmds = build_commands(tools, tmp / "in", tmp / "w", ocfg)
         assert cmds["interface"][:5] == ["/b/InterfaceCOLMAP", "-i", str(tmp / "in"), "-o", str(tmp / "w/scene.mvs")]
@@ -282,19 +393,32 @@ if __name__ == "__main__":
         d = cmds["densify"]
         assert d[0] == "/b/DensifyPointCloud" and d[d.index("-i") + 1] == str(tmp / "w/scene.mvs")
         assert d[d.index("--resolution-level") + 1] == "1" and d[d.index("--number-views") + 1] == "5"
-        assert d[d.index("--max-threads") + 1] == "0"
-        u = undistort_command("colmap", tmp / "img", tmp / "sp", tmp / "out", 1600)
-        assert u[1] == "image_undistorter" and u[u.index("--max_image_size") + 1] == "1600"
+        assert d[d.index("--max-threads") + 1] == "0" and d[d.index("--cuda-device") + 1] == "-1"
+        assert d[d.index("--remove-dmaps") + 1] == "1"
+        (tmp / "run" / "dense").mkdir(parents=True)
+        (tmp / "imgs").mkdir()
+        pre = docker_prefix("t2/openmvs:x", [tmp / "run", tmp / "run" / "dense"], [tmp / "imgs", tmp / "run"],
+                            tmp / "run" / "dense")
+        real = Path(os.path.realpath(tmp))
+        assert pre[:3] == ["docker", "run", "--rm"] and pre[pre.index("--gpus") + 1] == "all"
+        assert pre[pre.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}" and pre[-1] == "t2/openmvs:x"
+        vols = [pre[i + 1] for i, a in enumerate(pre) if a == "-v"]
+        assert vols == [f"{real / 'run'}:{real / 'run'}", f"{real / 'imgs'}:{real / 'imgs'}:ro"], vols
+        c = build_commands({n: n for n in OPENMVS_TOOLS}, tmp / "in", tmp / "w", ocfg, pre)
+        assert c["densify"][:len(pre)] == pre and c["densify"][len(pre)] == "DensifyPointCloud"
+        assert mount_dirs([tmp / "a" / "b", tmp / "a", tmp / "c"]) == [real / "a", real / "c"]
 
-        # missing-binary skip: None, no row, no workspace
+        # missing-binary / missing-image skip: None, no row, no workspace
         art = tmp / "artifacts"
-        assert run(cfg, str(tmp / "run"), str(art)) is None
-        assert not (art / "dense_metrics.csv").exists() and not (tmp / "run").exists()
-        ocfg["bin_dir"] = None
+        assert run(cfg, str(tmp / "run2"), str(art)) is None
+        assert not (art / "dense_metrics.csv").exists() and not (tmp / "run2").exists()
+        ocfg["container"] = "t2/openmvs:does-not-exist"
+        assert run(cfg, str(tmp / "run2"), str(art)) is None and not (tmp / "run2").exists()
+        ocfg["container"], ocfg["bin_dir"] = None, None
         if shutil.which("InterfaceCOLMAP") is None:
-            assert run(cfg, str(tmp / "run"), str(art)) is None and not (art / "dense_metrics.csv").exists()
+            assert run(cfg, str(tmp / "run2"), str(art)) is None and not (art / "dense_metrics.csv").exists()
         cfg["dense"]["enabled"] = False
-        assert run(cfg, str(tmp / "run"), str(art)) is None
+        assert run(cfg, str(tmp / "run2"), str(art)) is None
         fake = tmp / "bin"
         fake.mkdir()
         (fake / "InterfaceCOLMAP").write_text("#!/bin/sh\n")
@@ -324,11 +448,6 @@ if __name__ == "__main__":
         p, c = read_ply(tmp / "c.ply")
         assert p.shape == (2, 3) and p[1, 2] == 5 and c is None
 
-        # mvs_exclude parsing
-        (tmp / "frames").mkdir()
-        (tmp / "frames" / "mvs_exclude.txt").write_text("img_0001.png\nimg_0003\n\n")
-        assert excluded_names(tmp / "frames", ["img_0000.png", "img_0001.png", "img_0003.jpg"]) == \
-            ["img_0001.png", "img_0003.jpg"]
         (tmp / "images.txt").write_text("# c\n1 1 0 0 0 0 0 0 1 img_0000.png\n10 20 -1\n"
                                         "2 1 0 0 0 0 0 0 1 img_0001.png\n\n3 1 0 0 0 0 0 0 1 img_0002.png\n1 2 3\n")
         assert model_image_names(tmp / "images.txt") == ["img_0000.png", "img_0001.png", "img_0002.png"]

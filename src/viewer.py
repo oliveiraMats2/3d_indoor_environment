@@ -17,21 +17,25 @@
 # ╚══════════════════════════════════════════════════════════════════════════════════════╝
 
 """Viewer: Open3D window (or offscreen render) of a cloud with the camera trajectory and frustums;
-optionally records an orbit video."""
+records one orbit video per cloud and two still figures of the sparse cloud with the camera poses."""
 # PROMPT COMPLEMENT
 # Stage: viewer (last 3D stage of main.py, before videos: run_safe records the orbit video in a child
 #        process; `python view.py --config <yaml>` opens the interactive window on a finished run).
 # Goal : show the reconstruction (cloud or mesh) + camera trajectory + frustums; main.py renders an
-#        orbit around the scene centre into an mp4 without user interaction.
-# In   : viewer.cloud -> sparse: clean/sparse/cloud_clean.ply (fallback exports/colmap/sparse.ply);
-#        patch_match|openmvs: clean/<m>/cloud_clean.ply (fallback dense/<m>/fused.ply);
-#        mesh: exports/meshlab/mesh.ply. scale/centers_cm.npy, sfm/{K,cam_R,cam_t}.npy,
-#        planes/T_floor.npy (optional, gives the up axis).
-# Out  : <run_dir>/videos/navigation_<cloud>_<seconds>s.mp4 (videos.codec through videos.open_writer).
+#        orbit around the scene centre into an mp4 per cloud without user interaction, plus two still
+#        figures of the sparse cloud with the camera poses (T2 E2 / 4.A.1).
+# In   : each cloud of viewer.clouds (list; empty/null -> [viewer.cloud]):
+#        sparse: clean/sparse/cloud_clean.ply (fallback exports/colmap/sparse.ply);
+#        mesh: exports/meshlab/mesh.ply; any other name = a dense method: clean/<m>/cloud_clean.ply
+#        (fallback dense/<m>/fused.ply). scale/centers_cm.npy, sfm/{K,cam_R,cam_t}.npy,
+#        planes/{T_floor,ceiling}.npy (optional: up axis / floor frame, ceiling crop of the top view).
+# Out  : <run_dir>/videos/navigation_<cloud>_<seconds>s.mp4 per cloud (videos.codec through
+#        videos.open_writer); viewer.figures -> <run_dir>/figures/sparse_poses.png (3/4 view) and
+#        figures/sparse_poses_top.png (top view in the floor frame, scale bar in cm when metric).
 #        No CSV (videos.csv belongs to the videos stage; main.py rewrites it after this stage).
-# YAML : viewer.{enabled, cloud, seconds, fps, offscreen (auto|true|false), timeout_s, width, height,
-#        frustum_cm, point_size, fov_deg, orbit_radius_factor, orbit_elevation_deg, background};
-#        videos.codec; scale.provisional_extent_cm; run.log_level.
+# YAML : viewer.{enabled, cloud, clouds, figures, seconds, fps, offscreen (auto|true|false), timeout_s,
+#        width, height, frustum_cm, point_size, fov_deg, orbit_radius_factor, orbit_elevation_deg,
+#        background}; videos.codec; scale.provisional_extent_cm; run.log_level.
 # Rules: clean clouds and mesh are in working units (frame of scale/centers_cm.npy); raw sparse.ply and
 #        fused.ply are in model units -> multiplied by s when stage_io.scale_info says unit=cm.
 #        Frustum size = frustum_cm * stage_io.units_per_cm. offscreen true -> rendering.OffscreenRenderer
@@ -45,8 +49,13 @@ optionally records an orbit video."""
 #        child (run_safe) so a native renderer abort (no EGL, no macOS WindowServer) cannot kill main.py.
 #        Linux + Open3D 0.20 over SSH (DISPLAY=localhost:10.0): GLFW cannot open an X11 window; both
 #        OffscreenRenderer and the hidden Visualizer (EGL fallback) render fine.
+#        Figures: OffscreenRenderer (EGL, GPU when available), perspective 3/4 view and orthographic top
+#        view (exact pixels per unit -> scale bar); blank image, exception or a crashed child -> matplotlib
+#        (Agg) fallback in the floor frame. Top view drops points above 95% of the ceiling height (from
+#        planes/ceiling.npy) so the ceiling does not hide the room. Each video and the figures run in their
+#        own spawn child, each with viewer.timeout_s.
 # >>> BEGIN IMPLEMENTATION >>>
-import ctypes, ctypes.util, logging, multiprocessing, os, sys
+import ctypes, ctypes.util, logging, multiprocessing, os, re, sys
 from pathlib import Path
 
 import cv2
@@ -62,16 +71,36 @@ TRAJECTORY_RGB = (1.0, 0.0, 0.0)
 FRUSTUM_RGB = (0.0, 0.3, 1.0)
 MAX_FRUSTUMS = 60      # frustums drawn (evenly spaced along the trajectory): 800+ merge into an opaque band
 WARMUP_RENDERS = 5     # OffscreenRenderer re-renders of a black image (first of a fresh scene, ~2% of the rest)
+FIGURE_AZIMUTH_DEG = 45.0    # 3/4 view of figures/sparse_poses.png: azimuth on the orbit ring, elevation 35 deg
+FIGURE_ELEVATION_DEG = 35.0
+FIGURE_LINE_WIDTH = 2.0      # trajectory/frustum width in the still figures (videos keep 1 px)
+CEILING_KEEP_FRAC = 0.95     # top view: keep points below this fraction of the ceiling height
+MPL_MAX_POINTS = 150_000     # matplotlib fallback: random subsample of the cloud
+DEFAULTS = {"clouds": None, "figures": True}  # keys newer than the YAML schema
+
+def settings(cfg: dict) -> dict:
+
+    return {**DEFAULTS, **cfg["viewer"]}
+
+def cloud_names(v: dict) -> list[str]:
+    """viewer.clouds (order kept, duplicates dropped), else [viewer.cloud]."""
+
+    names = v.get("clouds") or [v["cloud"]]
+
+    return list(dict.fromkeys(str(n) for n in names))
 
 def cloud_path(run_dir: Path, cloud: str) -> tuple[Path | None, bool]:
-    """(path, in_model_units) of the first existing candidate for viewer.cloud."""
+    """(path, in_model_units) of the first existing candidate for a cloud name: sparse, mesh or any dense
+    method written under dense/<method>/."""
+
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", cloud):
+        log.warning("viewer: invalid cloud name %r", cloud)
+        return None, False
 
     candidates = {
         "sparse": [("clean/sparse/cloud_clean.ply", False), ("exports/colmap/sparse.ply", True)],
-        "patch_match": [("clean/patch_match/cloud_clean.ply", False), ("dense/patch_match/fused.ply", True)],
-        "openmvs": [("clean/openmvs/cloud_clean.ply", False), ("dense/openmvs/fused.ply", True)],
         "mesh": [("exports/meshlab/mesh.ply", False)],
-    }[cloud]
+    }.get(cloud, [(f"clean/{cloud}/cloud_clean.ply", False), (f"dense/{cloud}/fused.ply", True)])
 
     for rel, raw in candidates:
         if (run_dir / rel).exists():
@@ -197,11 +226,9 @@ def clip_planes(eyes: np.ndarray, centre: np.ndarray) -> tuple[float, float]:
 
     return 0.01 * d, 4.0 * d
 
-def render_offscreen(geoms: list, v: dict, eyes: np.ndarray, centre: np.ndarray, up: np.ndarray):
+def add_geometries(scene, geoms: list, v: dict, line_width: float = 1.0) -> None:
+    """Add geoms to an Open3D rendering scene as g0, g1, ... (lines unlit, coloured clouds/meshes unlit)."""
 
-    renderer = o3d.visualization.rendering.OffscreenRenderer(v["width"], v["height"])
-    renderer.scene.set_background([*v["background"], 1.0])
-    renderer.scene.view.set_post_processing(False)  # no tone mapping: true colours and background
     for i, g in enumerate(geoms):
         mat = o3d.visualization.rendering.MaterialRecord()
         is_lines = isinstance(g, o3d.geometry.LineSet)
@@ -209,8 +236,33 @@ def render_offscreen(geoms: list, v: dict, eyes: np.ndarray, centre: np.ndarray,
         lit = is_mesh and not g.has_vertex_colors()  # coloured mesh: unlit, true colours (lit is too dark)
         mat.shader = "unlitLine" if is_lines else "defaultLit" if lit else "defaultUnlit"
         mat.point_size = float(v["point_size"])
-        mat.line_width = 1.0
-        renderer.scene.add_geometry(f"g{i}", g, mat)
+        mat.line_width = float(line_width)
+        scene.add_geometry(f"g{i}", g, mat)
+
+def offscreen_renderer(geoms: list, v: dict, line_width: float = 1.0):
+
+    renderer = o3d.visualization.rendering.OffscreenRenderer(v["width"], v["height"])
+    renderer.scene.set_background([*v["background"], 1.0])
+    renderer.scene.view.set_post_processing(False)  # no tone mapping: true colours and background
+    add_geometries(renderer.scene, geoms, v, line_width)
+
+    return renderer
+
+def render_image(renderer) -> np.ndarray:
+    """RGB image; a black one (first of a fresh scene, ~2% of later ones) is re-rendered up to
+    WARMUP_RENDERS times."""
+
+    frame = np.asarray(renderer.render_to_image())
+    for _ in range(WARMUP_RENDERS):
+        if float(frame.std()) >= 1.0:
+            break
+        frame = np.asarray(renderer.render_to_image())
+
+    return frame
+
+def render_offscreen(geoms: list, v: dict, eyes: np.ndarray, centre: np.ndarray, up: np.ndarray):
+
+    renderer = offscreen_renderer(geoms, v)
 
     near, far = clip_planes(eyes, centre)
     cam = renderer.scene.camera
@@ -219,11 +271,7 @@ def render_offscreen(geoms: list, v: dict, eyes: np.ndarray, centre: np.ndarray,
     for eye in eyes:
         renderer.setup_camera(float(v["fov_deg"]), centre, eye, up)
         cam.set_projection(float(v["fov_deg"]), v["width"] / v["height"], near, far, vertical)
-        frame = np.asarray(renderer.render_to_image())
-        for _ in range(WARMUP_RENDERS):  # first image of a fresh scene, and ~2% of later ones, are black
-            if float(frame.std()) >= 1.0:
-                break
-            frame = np.asarray(renderer.render_to_image())
+        frame = render_image(renderer)
         if float(frame.std()) >= 1.0:
             last = frame
         elif last is not None:  # still black after the retries: repeat the previous frame
@@ -262,9 +310,9 @@ def render_hidden(geoms: list, v: dict, eyes: np.ndarray, centre: np.ndarray, up
     finally:
         vis.destroy_window()
 
-def video_out(run_dir: Path, v: dict) -> Path:
+def video_out(run_dir: Path, v: dict, cloud: str | None = None) -> Path:
 
-    return Path(run_dir) / "videos" / f"navigation_{v['cloud']}_{v['seconds']}s.mp4"
+    return Path(run_dir) / "videos" / f"navigation_{cloud or cloud_names(v)[0]}_{v['seconds']}s.mp4"
 
 def use_offscreen(v: dict) -> bool:
     """viewer.offscreen auto -> OffscreenRenderer only when there is no usable display."""
@@ -282,12 +330,13 @@ def first_frame(frames):
 
     return frame if frame is not None and float(frame.std()) >= 1.0 else None
 
-def record(geoms: list, v: dict, run_dir: Path, up: np.ndarray, codec: str = "auto") -> Path | None:
+def record(geoms: list, v: dict, run_dir: Path, up: np.ndarray, codec: str = "auto",
+           cloud: str | None = None) -> Path | None:
 
     centre, radius = scene_frame(geoms)
     n = int(round(v["seconds"] * v["fps"]))
     eyes = orbit_eyes(centre, radius * v["orbit_radius_factor"], up, v["orbit_elevation_deg"], n)
-    out = video_out(run_dir, v)
+    out = video_out(run_dir, v, cloud)
     offscreen = use_offscreen(v)
     renderers = [render_offscreen, render_hidden] if offscreen else [render_hidden, render_offscreen]
     log.info("viewer: offscreen=%s -> %s", v["offscreen"], renderers[0].__name__)
@@ -340,80 +389,386 @@ def has_display() -> bool:
 
     return bool(handle)
 
-def run(cfg: dict, run_dir: str, interactive: bool = False) -> Path | None:
-    """interactive False (main.py): record the orbit video; True (view.py): Open3D window."""
+def scene(cfg: dict, run_dir: Path, cloud: str) -> tuple[list, tuple | None]:
+    """(geoms = [cloud?, trajectory, frustums...], cams) of one cloud name."""
 
-    v = cfg["viewer"]
-    run_dir = Path(run_dir)
+    v = settings(cfg)
     geoms = []
-    cloud = load_cloud(run_dir, v["cloud"])
-    if cloud is not None:
-        geoms.append(cloud)
+    geom = load_cloud(run_dir, cloud)
+    if geom is not None:
+        geoms.append(geom)
 
     cams = cameras(run_dir)
     if cams is not None:
-        points = np.asarray(cloud.points if hasattr(cloud, "points") else cloud.vertices) if cloud is not None else cams[3]
+        points = np.asarray(geom.points if hasattr(geom, "points") else geom.vertices) if geom is not None else cams[3]
         size = v["frustum_cm"] * stage_io.units_per_cm(run_dir, points, cfg["scale"]["provisional_extent_cm"])
         geoms += camera_geometries(run_dir, cams, size)
 
+    return geoms, cams
+
+def run(cfg: dict, run_dir: str, interactive: bool = False, cloud: str | None = None) -> Path | None:
+    """interactive False (main.py): record the orbit video of `cloud` (default: first of viewer.clouds);
+    True (view.py): Open3D window."""
+
+    v = settings(cfg)
+    run_dir = Path(run_dir)
+    cloud = cloud or cloud_names(v)[0]
+    geoms, cams = scene(cfg, run_dir, cloud)
     if not geoms:
         log.warning("viewer: nothing to show in %s", run_dir)
         return None
 
     if not interactive:
-        return record(geoms, v, run_dir, up_axis(run_dir, cams), cfg.get("videos", {}).get("codec", "auto"))
+        return record(geoms, v, run_dir, up_axis(run_dir, cams), cfg.get("videos", {}).get("codec", "auto"), cloud)
 
     if not has_display():
         log.warning("viewer: no usable display (DISPLAY=%s); main.py records the orbit video instead",
                     os.environ.get("DISPLAY"))
         return None
 
-    o3d.visualization.draw_geometries(geoms, window_name=f"{run_dir.name} - {v['cloud']}",
+    o3d.visualization.draw_geometries(geoms, window_name=f"{run_dir.name} - {cloud}",
                                       width=v["width"], height=v["height"])
 
     return None
 
-def _record_child(cfg: dict, run_dir: str) -> None:
-    """Child process body of run_safe: its own logging (stdout + run.log), exit 0 even without a video."""
+def floor_transform(run_dir: Path, cams) -> np.ndarray:
+    """4x4 world -> floor frame (z up): planes/T_floor.npy, else a rotation taking up_axis to +z."""
+
+    t_floor = run_dir / "planes" / "T_floor.npy"
+    if t_floor.exists():
+        return np.load(t_floor)
+
+    up = up_axis(run_dir, cams)
+    e1 = np.cross(up, [1.0, 0.0, 0.0])
+    if np.linalg.norm(e1) < 1e-6:
+        e1 = np.cross(up, [0.0, 1.0, 0.0])
+    e1 /= np.linalg.norm(e1)
+    T = np.eye(4)
+    T[:3, :3] = np.stack([e1, np.cross(up, e1), up])
+
+    return T
+
+def to_frame(T: np.ndarray, pts: np.ndarray) -> np.ndarray:
+
+    return np.asarray(pts, float).reshape(-1, 3) @ T[:3, :3].T + T[:3, 3]
+
+def ceiling_z(run_dir: Path, T: np.ndarray) -> float | None:
+    """Ceiling height in the floor frame from planes/ceiling.npy (a, b, c, d), None when unknown."""
+
+    path = run_dir / "planes" / "ceiling.npy"
+    if not path.exists():
+        return None
+
+    plane = np.load(path).ravel()
+    if len(plane) != 4 or not np.all(np.isfinite(plane)):
+        return None
+
+    z = float(to_frame(T, -plane[3] * plane[:3] / np.linalg.norm(plane[:3]))[0, 2])
+
+    return z if z > 0 else None
+
+def nice_length(span: float) -> float:
+    """Largest 1/2/5 x 10^k not above a fifth of span (scale bar length)."""
+
+    target = span / 5
+    base = 10 ** np.floor(np.log10(target))
+
+    return float(max(m * base for m in (1, 2, 5) if m * base <= target))
+
+def scale_label(length: float, metric: bool) -> str:
+
+    return f"{length:g} cm" if metric else f"{length:.3g} model units (no metric scale)"
+
+def split_geoms(geoms: list):
+    """(cloud points, cloud colours or None, [(segments (S,2,3), rgb)]) of a scene."""
+
+    pts, cols, segs = np.zeros((0, 3)), None, []
+    for g in geoms:
+        if isinstance(g, o3d.geometry.LineSet):
+            p, l = np.asarray(g.points), np.asarray(g.lines)
+            rgb = tuple(np.asarray(g.colors)[0]) if g.has_colors() and len(l) else FRUSTUM_RGB
+            segs.append((p[l], rgb))
+        elif hasattr(g, "points"):
+            pts = np.asarray(g.points)
+            cols = np.asarray(g.colors) if g.has_colors() else None
+        else:
+            pts = np.asarray(g.vertices)
+            cols = np.asarray(g.vertex_colors) if g.has_vertex_colors() else None
+
+    return pts, cols, segs
+
+def top_bounds(xy: np.ndarray, traj_xy: np.ndarray, w: int, h: int) -> tuple[float, float, float, float]:
+    """(cx, cy, half_width, half_height) of the top view: 1-99th percentile of the cloud plus the whole
+    trajectory, 5% margin, aspect of the image."""
+
+    box = [np.percentile(xy, [1, 99], axis=0)] if len(xy) else []
+    if len(traj_xy):
+        box.append(np.stack([traj_xy.min(0), traj_xy.max(0)]))
+    box = np.concatenate(box)
+    lo, hi = box.min(0), box.max(0)
+    (cx, cy), (hw, hh) = (lo + hi) / 2, np.maximum((hi - lo) / 2 * 1.05, 1e-6)
+    hw, hh = max(hw, hh * w / h), max(hh, hw * h / w)
+
+    return float(cx), float(cy), float(hw), float(hh)
+
+def draw_scale_bar(img: np.ndarray, length_px: float, label: str, colour=(0, 0, 0)) -> None:
+
+    h = img.shape[0]
+    x0, y0 = 30, h - 30
+    x1 = int(round(x0 + length_px))
+    cv2.line(img, (x0, y0), (x1, y0), colour, 4)
+    for x in (x0, x1):
+        cv2.line(img, (x, y0 - 8), (x, y0 + 8), colour, 2)
+    cv2.putText(img, label, (x0, y0 - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2, cv2.LINE_AA)
+
+def draw_caption(img: np.ndarray, text: str, colour=(0, 0, 0)) -> None:
+
+    cv2.putText(img, text, (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.75, colour, 2, cv2.LINE_AA)
+
+def figures_open3d(geoms: list, v: dict, T: np.ndarray, zc: float | None, metric: bool,
+                   caption: str) -> tuple[np.ndarray, np.ndarray] | None:
+    """(3/4 view, top view) BGR images from the OffscreenRenderer (EGL), None when a render is blank."""
+
+    w, h = v["width"], v["height"]
+    rendering = o3d.visualization.rendering
+    renderer = offscreen_renderer(geoms, v, FIGURE_LINE_WIDTH)
+    cam = renderer.scene.camera
+    up = T[2, :3] / np.linalg.norm(T[2, :3])
+
+    # 3/4 view: one eye of the orbit ring, perspective
+    centre, radius = scene_frame(geoms)
+    n = int(round(360 / FIGURE_AZIMUTH_DEG))
+    eye = orbit_eyes(centre, radius * v["orbit_radius_factor"], up, FIGURE_ELEVATION_DEG, n)[1]
+    near, far = clip_planes(eye[None], centre)
+    renderer.setup_camera(float(v["fov_deg"]), centre, eye, up)
+    cam.set_projection(float(v["fov_deg"]), w / h, near, far, rendering.Camera.FovType.Vertical)
+    three_quarter = render_image(renderer)
+    if float(three_quarter.std()) < 1.0:
+        return None
+
+    # top view: orthographic along -z of the floor frame (exact pixels per unit), ceiling cropped; only the
+    # cloud is rendered, trajectory and frustums are drawn over it in 2D (else hidden under walls/furniture)
+    pts, cols, segs = split_geoms(geoms)
+    fpts = to_frame(T, pts)
+    has_cloud = not isinstance(geoms[0], o3d.geometry.LineSet)
+    for i in range(1 if has_cloud else 0, len(geoms)):
+        renderer.scene.remove_geometry(f"g{i}")
+    if zc is not None and len(fpts) and has_cloud:
+        keep = fpts[:, 2] < CEILING_KEEP_FRAC * zc
+        renderer.scene.remove_geometry("g0")
+        top_cloud = geoms[0].select_by_index(np.flatnonzero(keep)) if hasattr(geoms[0], "points") else geoms[0]
+        add_geometries(renderer.scene, [top_cloud], v, FIGURE_LINE_WIDTH)
+        fpts = fpts[keep]
+    traj = to_frame(T, np.concatenate([s.reshape(-1, 3) for s, rgb in segs if rgb == TRAJECTORY_RGB] or [np.zeros((0, 3))]))
+    cx, cy, hw, hh = top_bounds(fpts[:, :2], traj[:, :2], w, h)
+    allz = np.concatenate([fpts[:, 2], traj[:, 2], [0.0]])
+    depth = float(allz.max() - allz.min()) + 2 * max(hw, hh)
+    Rinv = T[:3, :3].T
+    centre_w = Rinv @ (np.array([cx, cy, float(allz.min())]) - T[:3, 3])
+    eye_w = centre_w + up * depth
+    cam.look_at(centre_w, eye_w, T[1, :3])
+    cam.set_projection(rendering.Camera.Projection.Ortho, -hw, hw, -hh, hh, 1e-3 * depth, 2 * depth)
+    top = render_image(renderer) if has_cloud else np.full((h, w, 3), np.uint8(255 * np.asarray(v["background"])))
+    if float(top.std()) < 1.0 and has_cloud:
+        return None
+
+    three_quarter = cv2.cvtColor(three_quarter, cv2.COLOR_RGB2BGR)
+    top = np.ascontiguousarray(cv2.cvtColor(top, cv2.COLOR_RGB2BGR))
+
+    def px(p):  # floor frame xy -> top view pixel
+        return int(round((p[0] - cx + hw) / (2 * hw) * w)), int(round((cy + hh - p[1]) / (2 * hh) * h))
+
+    for s, rgb in sorted(segs, key=lambda sr: sr[1] == TRAJECTORY_RGB):  # trajectory drawn last
+        bgr = tuple(int(255 * c) for c in rgb[::-1])
+        for a, b in to_frame(T, s.reshape(-1, 3)).reshape(-1, 2, 3):
+            cv2.line(top, px(a), px(b), bgr, 2 if rgb == TRAJECTORY_RGB else 1, cv2.LINE_AA)
+    if len(traj):
+        centres = to_frame(T, geoms_centres(segs))
+        cv2.circle(top, px(centres[0]), 9, (0, 160, 0), -1)   # start: green
+        cv2.circle(top, px(centres[-1]), 9, (0, 0, 0), 2)     # end: black ring
+    length = nice_length(2 * hw)
+    draw_scale_bar(top, length / (2 * hw) * w, scale_label(length, metric))
+    draw_caption(three_quarter, caption)
+    draw_caption(top, caption + " - top view, floor frame (start green, end black)")
+
+    return three_quarter, top
+
+def geoms_centres(segs: list) -> np.ndarray:
+    """Camera centres in trajectory order from the trajectory segments (i -> i+1)."""
+
+    traj = [s for s, rgb in segs if rgb == TRAJECTORY_RGB]
+    if not traj:
+        return np.zeros((0, 3))
+
+    s = traj[0]
+
+    return np.vstack([s[:, 0], s[-1:, 1]])
+
+def figures_matplotlib(geoms: list, v: dict, T: np.ndarray, zc: float | None, metric: bool,
+                       caption: str) -> tuple[np.ndarray, np.ndarray]:
+    """Fallback (no renderer): (3/4 view, top view) BGR images drawn with matplotlib Agg in the floor frame."""
+
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.collections import LineCollection
+    from matplotlib.figure import Figure
+    from mpl_toolkits.mplot3d.art3d import Line3DCollection
+
+    w, h = v["width"], v["height"]
+    bg = tuple(v["background"])
+    pts, cols, segs = split_geoms(geoms)
+    fpts = to_frame(T, pts)
+    cols = np.full((len(fpts), 3), 0.4) if cols is None else cols
+    rng = np.random.default_rng(0)
+    sub = rng.choice(len(fpts), MPL_MAX_POINTS, replace=False) if len(fpts) > MPL_MAX_POINTS else slice(None)
+    fpts, cols = fpts[sub], cols[sub]
+    fsegs = [(to_frame(T, s.reshape(-1, 3)).reshape(-1, 2, 3), rgb) for s, rgb in segs]
+    centres = to_frame(T, geoms_centres(segs))
+    unit = "cm" if metric else "model units"
+
+    def image(fig) -> np.ndarray:
+        canvas = FigureCanvasAgg(fig)
+        canvas.draw()
+        rgba = np.asarray(canvas.buffer_rgba())
+        return cv2.resize(cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR), (w, h))
+
+    # 3/4 view
+    fig = Figure(figsize=(w / 100, h / 100), dpi=100, facecolor=bg)
+    ax = fig.add_subplot(projection="3d", facecolor=bg)
+    ax.scatter(*fpts.T, c=cols, s=0.5, depthshade=False, linewidths=0)
+    for s, rgb in fsegs:
+        ax.add_collection3d(Line3DCollection(s, colors=[rgb], linewidths=1.5 if rgb == TRAJECTORY_RGB else 0.6))
+    box = np.concatenate([np.percentile(fpts, [2, 98], axis=0) if len(fpts) else np.zeros((0, 3)), centres])
+    lo, hi = box.min(0), box.max(0)
+    ax.set(xlim=(lo[0], hi[0]), ylim=(lo[1], hi[1]), zlim=(lo[2], hi[2]),
+           xlabel=f"x ({unit})", ylabel=f"y ({unit})", zlabel=f"z ({unit})")
+    ax.set_box_aspect(np.maximum(hi - lo, 1e-6))
+    ax.view_init(elev=FIGURE_ELEVATION_DEG, azim=FIGURE_AZIMUTH_DEG - 90)
+    ax.set_title(caption)
+    three_quarter = image(fig)
+
+    # top view
+    if zc is not None:
+        keep = fpts[:, 2] < CEILING_KEEP_FRAC * zc
+        fpts, cols = fpts[keep], cols[keep]
+    order = np.argsort(fpts[:, 2])  # highest points drawn last, as seen from above
+    cx, cy, hw, hh = top_bounds(fpts[:, :2], centres[:, :2], w, h)
+    fig = Figure(figsize=(w / 100, h / 100), dpi=100, facecolor=bg)
+    ax = fig.add_axes([0.06, 0.08, 0.92, 0.86], facecolor=bg)
+    ax.scatter(fpts[order, 0], fpts[order, 1], c=cols[order], s=0.5, linewidths=0)
+    for s, rgb in fsegs:
+        ax.add_collection(LineCollection(s[:, :, :2], colors=[rgb], linewidths=1.5 if rgb == TRAJECTORY_RGB else 0.6))
+    if len(centres):
+        ax.plot(*centres[0, :2], "o", color=(0, 0.63, 0), ms=8)
+        ax.plot(*centres[-1, :2], "o", mfc="none", mec="k", ms=8)
+    ax.set(xlim=(cx - hw, cx + hw), ylim=(cy - hh, cy + hh), aspect="equal",
+           xlabel=f"x ({unit})", ylabel=f"y ({unit})", title=caption + " - top view, floor frame")
+    length = nice_length(2 * hw)
+    x0, y0 = cx - hw + 0.05 * hw, cy - hh + 0.08 * hh
+    ax.plot([x0, x0 + length], [y0, y0], "k-", lw=3)
+    ax.text(x0, y0 + 0.03 * hh, scale_label(length, metric), fontsize=11)
+    top = image(fig)
+
+    return three_quarter, top
+
+def figures(cfg: dict, run_dir: str, renderer: str = "auto", out_dir: str | None = None) -> list[Path]:
+    """figures/sparse_poses.png (3/4 view) and figures/sparse_poses_top.png (top view in the floor frame,
+    scale bar in cm when metric) of the sparse cloud + trajectory + frustums. renderer: auto (Open3D
+    OffscreenRenderer, matplotlib fallback) | matplotlib."""
+
+    v = settings(cfg)
+    run_dir = Path(run_dir)
+    geoms, cams = scene(cfg, run_dir, "sparse")
+    if not geoms:
+        log.warning("viewer: no sparse cloud nor cameras in %s, no figures", run_dir)
+        return []
+
+    T = floor_transform(run_dir, cams)
+    zc = ceiling_z(run_dir, T)
+    metric = stage_io.scale_info(run_dir)[1] == "cm"
+    n_cams = 0 if cams is None else len(cams[1])
+    caption = f"sparse cloud + {n_cams} camera poses"
+    images, used = None, "matplotlib"
+    if renderer != "matplotlib":
+        try:
+            images, used = figures_open3d(geoms, v, T, zc, metric, caption), "open3d"
+        except Exception as exc:  # noqa: BLE001 - any renderer failure: matplotlib
+            log.warning("viewer: OffscreenRenderer figures failed (%s)", exc)
+        if images is None:
+            log.warning("viewer: OffscreenRenderer gave a blank figure, matplotlib fallback")
+            used = "matplotlib"
+    if images is None:
+        images = figures_matplotlib(geoms, v, T, zc, metric, caption)
+
+    out = Path(out_dir) if out_dir else run_dir / "figures"
+    out.mkdir(parents=True, exist_ok=True)
+    paths = [out / "sparse_poses.png", out / "sparse_poses_top.png"]
+    for path, img in zip(paths, images):
+        cv2.imwrite(str(path), img)
+    log.info("viewer: figures (%s) -> %s", used, ", ".join(str(p) for p in paths))
+
+    return paths
+
+def _record_child(cfg: dict, run_dir: str, job: str = "video", arg: str | None = None) -> None:
+    """Child process body of run_safe: its own logging (stdout + run.log), exit 0 even without output.
+    job "video" -> orbit of cloud `arg`; "figures" -> still figures with renderer `arg`."""
 
     handlers = [logging.StreamHandler(sys.stdout)]
     if (Path(run_dir) / "run.log").exists():
         handlers.append(logging.FileHandler(Path(run_dir) / "run.log"))
     logging.basicConfig(level=cfg.get("run", {}).get("log_level", "INFO"), handlers=handlers,
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
-    run(cfg, run_dir)
+    if job == "figures":
+        figures(cfg, run_dir, renderer=arg or "auto")
+    else:
+        run(cfg, run_dir, cloud=arg)
+
+def _spawn(cfg: dict, run_dir: str, job: str, arg: str | None, timeout_s: float) -> int | None:
+    """Run _record_child in a "spawn" child; exit code (None or != 0 = crashed / killed)."""
+
+    child = multiprocessing.get_context("spawn").Process(target=_record_child, args=(cfg, str(run_dir), job, arg))
+    child.start()
+    child.join(timeout_s)
+    if child.is_alive():
+        log.warning("viewer: %s %s still running after %s s (viewer.timeout_s): killed", job, arg, timeout_s)
+        child.kill()
+        child.join()
+        return None
+
+    return child.exitcode
 
 def run_safe(cfg: dict, run_dir: str) -> Path | None:
-    """main.py stage: run() in a "spawn" child, so a native Open3D abort (no EGL / no WindowServer) or a
-    hang (viewer.timeout_s) only costs the video. Returns the video path or None."""
+    """main.py stage: one "spawn" child per cloud of viewer.clouds (orbit video) and one for the figures,
+    so a native Open3D abort (no EGL / no WindowServer) or a hang (viewer.timeout_s) only costs that
+    output. Returns the first video written, or None."""
 
-    v = cfg["viewer"]
+    v = settings(cfg)
     if not v["enabled"]:
         log.info("viewer disabled")
         return None
 
-    out = video_out(Path(run_dir), v)
-    out.unlink(missing_ok=True)
-    child = multiprocessing.get_context("spawn").Process(target=_record_child, args=(cfg, str(run_dir)))
-    child.start()
-    child.join(v["timeout_s"])
-    if child.is_alive():
-        log.warning("viewer: recording still running after %s s (viewer.timeout_s): killed", v["timeout_s"])
-        child.kill()
-        child.join()
+    videos_written = []
+    for cloud in cloud_names(v):
+        out = video_out(Path(run_dir), v, cloud)
+        out.unlink(missing_ok=True)
+        if cloud_path(Path(run_dir), cloud)[0] is None:
+            log.warning("viewer: no file for cloud=%s, no video", cloud)
+            continue
+        code = _spawn(cfg, run_dir, "video", cloud, v["timeout_s"])
+        if code != 0:
+            log.warning("viewer: recording of %s exited with code %s (renderer unavailable?): no video", cloud, code)
+        elif not out.exists():
+            log.warning("viewer: no video written (%s)", out)
+        else:
+            log.info("viewer: video %s", out)
+            videos_written.append(out)
 
-    if child.exitcode != 0:
-        log.warning("viewer: recording process exited with code %s (renderer unavailable?): no video",
-                    child.exitcode)
-        return None
+    if v["figures"]:
+        code = _spawn(cfg, run_dir, "figures", "auto", v["timeout_s"])
+        if code != 0:  # native renderer abort: matplotlib only
+            log.warning("viewer: figures child exited with code %s, retrying with matplotlib", code)
+            _spawn(cfg, run_dir, "figures", "matplotlib", v["timeout_s"])
 
-    if not out.exists():
-        log.warning("viewer: no video written (%s)", out)
-        return None
-
-    log.info("viewer: video %s", out)
-
-    return out
+    return videos_written[0] if videos_written else None
 # <<< END IMPLEMENTATION <<<
 
 if __name__ == "__main__":
@@ -440,6 +795,12 @@ if __name__ == "__main__":
         np.save(rd / "scale/centers_cm.npy", C * 50.0)
 
         assert cloud_path(rd, "sparse") == (rd / "exports/colmap/sparse.ply", True)
+        stage_io.write_ply(rd / "dense/my_mvs/fused.ply", pts / 50.0, rng.integers(0, 255, (2000, 3)))
+        assert cloud_path(rd, "my_mvs") == (rd / "dense/my_mvs/fused.ply", True)  # any dense method
+        assert cloud_path(rd, "openmvs") == (None, False) and cloud_path(rd, "../x") == (None, False)
+        assert cloud_names({"cloud": "mesh", "clouds": None}) == ["mesh"]
+        assert cloud_names({"cloud": "mesh", "clouds": ["sparse", "my_mvs", "sparse"]}) == ["sparse", "my_mvs"]
+        assert nice_length(1000) == 200 and nice_length(37) == 5 and scale_label(50, True) == "50 cm"
         g = load_cloud(rd, "sparse")
         assert np.abs(np.asarray(g.points)).max() > 50  # scaled back to cm
         cams = cameras(rd)
@@ -467,9 +828,20 @@ if __name__ == "__main__":
             print(f"offscreen={offscreen}: {n} frames, shape {frame.shape}, mean {frame.mean():.1f}")
             assert n == len(frames) == 20 and frame.shape == (240, 320, 3)
             assert min(float(f.std()) for f in frames) > 1  # no black frame anywhere in the orbit
-        cfg = {"viewer": {**base, "offscreen": "auto"}, "scale": {"provisional_extent_cm": 500}, "run": {"log_level": "INFO"}}
-        out = run_safe(cfg, tmp)  # spawn child, as main.py calls it
+        cfg = {"viewer": {**base, "offscreen": "auto", "clouds": ["sparse", "my_mvs", "openmvs"]},
+               "scale": {"provisional_extent_cm": 500}, "run": {"log_level": "INFO"}}
+        out = run_safe(cfg, tmp)  # spawn children, as main.py calls it (openmvs missing: skipped)
         assert out == rd / "videos/navigation_sparse_2s.mp4" and out.exists()
+        assert (rd / "videos/navigation_my_mvs_2s.mp4").exists()
+        assert not (rd / "videos/navigation_openmvs_2s.mp4").exists()
+        for name in ("sparse_poses.png", "sparse_poses_top.png"):  # written by the figures child
+            img = cv2.imread(str(rd / "figures" / name))
+            assert img is not None and img.shape == (240, 320, 3) and img.std() > 1, name
+        for renderer in ("matplotlib", "auto"):
+            paths = figures(cfg, tmp, renderer=renderer, out_dir=str(rd / f"fig_{renderer}"))
+            assert [p.name for p in paths] == ["sparse_poses.png", "sparse_poses_top.png"]
+            assert all(cv2.imread(str(p)).std() > 1 for p in paths)
+        print("figures OK")
         print("run_safe (offscreen=auto ->", "offscreen" if use_offscreen(cfg["viewer"]) else "hidden window", "): OK")
         assert run_safe({**cfg, "viewer": {**base, "enabled": False}}, tmp) is None
         if has_display() is False:
