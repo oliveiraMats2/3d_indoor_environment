@@ -23,10 +23,18 @@
 # In:  mesh.input close_holes -> mesh/close_holes/pre_pre/mesh.ply (falls back to mesh/poisson/pre, WARNING);
 #      liepa -> mesh/liepa/mesh.ply (same fallback); poisson -> mesh/poisson/pre/mesh.ply. Scene: clean/<source>/{points,colors}.npy (source as in
 #      poisson.pick_source), scale/centers_cm.npy, sfm/{cam_R,K,image_names}.npy, one frame of
-#      cfg["extraction"]["output_dir"] (image size; falls back to 2*cx, 2*cy).
-# Out: exports/meshlab/mesh.{ply,obj,stl,off}, exports/meshlab/scene.obj, exports/web/{mesh,scene}.glb (metres when the scale is metric),
+#      cfg["extraction"]["output_dir"] (image size; falls back to 2*cx, 2*cy), planes/T_floor.npy (web up axis).
+# Out: exports/meshlab/mesh.{ply,obj,stl,off}, exports/meshlab/scene.obj, exports/web/{mesh,scene}.glb,
 #      mesh/{vertices,faces,colors}.npy; artifacts_dir/mesh.csv (source, input, n_vertices, n_faces,
-#      poisson_depth, t_s).
+#      poisson_depth, meshlab_unit, web_unit, web_frame, scene_extent, t_s).
+# Units: exports/meshlab/* in working units = cm when scale/scale.npy is finite (as clean/, mesh/), else model.
+#        exports/web/*.glb follow glTF: metres (cm * 0.01) and +y up: p_web = 0.01 * Z_UP_TO_Y_UP @ T_floor @ p_cm,
+#        floor at y = 0 (planes/T_floor.npy; missing -> src.viewer.floor_transform camera-up fallback, WARNING).
+#        The transform is baked into the vertices (node matrices stay identity, so every loader sees metres).
+#        Unknown scale -> model units in both (meshlab_unit = web_unit = model).
+# Scene GLB nodes: points (POINTS), frustums (LINES, camera pyramids), frustum_faces (TRIANGLES, same pyramids),
+#        trajectory (TRIANGLES, tubes through the camera centers). Open3D read_triangle_mesh drops POINTS/LINES
+#        primitives: inspect scene.glb with trimesh.
 # YAML: mesh: {enabled, input: close_holes|liepa|poisson, frustum_cm, frustum_every, trajectory_cm};
 #       poisson.{source, depth} (source of the scene cloud, depth logged in the CSV).
 # Rules: *_cm sizes -> working units via stage_io.units_per_cm. Every written file is reloaded (trimesh for
@@ -49,6 +57,7 @@ log = logging.getLogger(__name__)
 
 FRUSTUM_RGBA = np.array([230, 60, 40, 255], dtype=np.uint8)
 TRAJECTORY_RGBA = np.array([40, 120, 230, 255], dtype=np.uint8)
+Z_UP_TO_Y_UP = np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]], dtype=np.float64)  # glTF +y up
 
 def pick_input(cfg: dict, run_dir: Path) -> Path | None:
     """mesh.input close_holes -> close_holes/pre_pre, liepa -> liepa (else poisson/pre, WARNING);
@@ -144,6 +153,20 @@ def colored_path(vertices: np.ndarray, segments: np.ndarray, rgba: np.ndarray) -
 
     return path
 
+def web_transform(run_dir: Path, cam_R: np.ndarray | None) -> tuple[np.ndarray, str, str]:
+    """4x4 working units -> glTF (metres when the scale is metric, +y up, floor at y = 0); (T, unit, frame)."""
+
+    from src.viewer import floor_transform  # lazy: viewer pulls its own rendering helpers
+    has_floor = (run_dir / "planes" / "T_floor.npy").exists()
+    if not has_floor:
+        log.warning("planes/T_floor.npy missing: web GLB up axis from the cameras (floor not at y = 0)")
+    cams = (None, cam_R, None, None) if cam_R is not None else None
+    unit = "m" if stage_io.scale_info(run_dir)[1] == "cm" else "model"
+    T = np.diag([0.01 if unit == "m" else 1.0] * 3 + [1.0]) @ Z_UP_TO_Y_UP @ floor_transform(run_dir, cams)
+    frame = "floor_y_up" if has_floor else "camera_y_up" if cam_R is not None else "model"
+
+    return T, unit, frame
+
 def verify(paths: dict[str, Path]) -> None:
 
     for name, path in paths.items():
@@ -205,41 +228,52 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
             mesh.compute_triangle_normals()  # STL requires them; OBJ/OFF writers warn if present
         o3d.io.write_triangle_mesh(str(path), mesh, write_vertex_colors=path.suffix != ".stl")
 
-    glb_scale = 0.01 if stage_io.scale_info(run_dir)[1] == "cm" else 1.0  # glTF is in metres: cm -> m
-    tmesh = trimesh.Trimesh(vertices, faces, vertex_colors=vcolors, process=False)
-    files["glb"] = web / "mesh.glb"
-    tmesh.copy().apply_scale(glb_scale).export(str(files["glb"]))
-
-    # X1: scene with point cloud, trajectory and frustums
     cam_R_path, K_path = run_dir / "sfm" / "cam_R.npy", run_dir / "sfm" / "K.npy"
+    cam_R = np.load(cam_R_path) if cam_R_path.exists() else None
+    T_web, web_unit, web_frame = web_transform(run_dir, cam_R)
+    # copies everywhere below: apply_transform acts in place and the working-unit arrays feed scene.obj
+    tmesh = trimesh.Trimesh(vertices.copy(), faces, vertex_colors=vcolors, process=False)
+    files["glb"] = web / "mesh.glb"
+    tmesh.apply_transform(T_web).export(str(files["glb"]))  # baked: identity node matrix
+
+    # X1: scene with point cloud, trajectory and frustums (built in working units, baked into the web frame)
     upc = stage_io.units_per_cm(run_dir, points, room_extent_cm=cfg["scale"]["provisional_extent_cm"])
     scene = trimesh.Scene()
     pc_colors = np.c_[colors, np.full(len(colors), 255, np.uint8)] if colors is not None else None
-    scene.add_geometry(trimesh.PointCloud(points, colors=pc_colors), geom_name="points")
+    scene.add_geometry(trimesh.PointCloud(points.copy(), colors=pc_colors).apply_transform(T_web), geom_name="points")
     f_verts, f_tris, f_edges = np.zeros((0, 3)), np.zeros((0, 3), int), np.zeros((0, 2), int)
     tube = None
     cams = centers if centers is not None else np.zeros((0, 3))
-    if centers is not None and cam_R_path.exists() and K_path.exists():
-        cam_R, K = np.load(cam_R_path), np.load(K_path)
+    if centers is not None and cam_R is not None and K_path.exists():
+        K = np.load(K_path)
         f_verts, f_tris, f_edges = frustums(cam_R, centers, K, image_size(cfg, run_dir, K),
                                             mcfg["frustum_cm"] * upc, mcfg["frustum_every"])
         tube = tubes(centers, mcfg["trajectory_cm"] * upc / 2)
         if len(f_edges):
-            scene.add_geometry(colored_path(f_verts, f_edges, FRUSTUM_RGBA), geom_name="frustums")
+            lines = colored_path(f_verts.copy(), f_edges, FRUSTUM_RGBA)
+            scene.add_geometry(lines.apply_transform(T_web), geom_name="frustums")
+            solid = trimesh.Trimesh(f_verts.copy(), f_tris, vertex_colors=np.tile(FRUSTUM_RGBA, (len(f_verts), 1)),
+                                    process=False)  # viewers that ignore LINES still show the cameras
+            scene.add_geometry(solid.apply_transform(T_web), geom_name="frustum_faces")
         if tube is not None:
             tube.visual.vertex_colors = np.tile(TRAJECTORY_RGBA, (len(tube.vertices), 1))  # face colors need scipy
-            scene.add_geometry(tube, geom_name="trajectory")
+            scene.add_geometry(tube.copy().apply_transform(T_web), geom_name="trajectory")
     else:
         log.warning("sfm/cam_R.npy, sfm/K.npy or camera centers missing: scene without cameras")
 
     files["scene_glb"] = web / "scene.glb"
-    scene.copy().apply_scale(glb_scale).export(str(files["scene_glb"]))
+    scene.export(str(files["scene_glb"]))
+    scene_extent = "x".join(f"{e:.3f}" for e in scene.extents)
+    log.info("web GLB: unit=%s frame=%s scene extent %s, nodes %s", web_unit, web_frame, scene_extent,
+             sorted(scene.graph.nodes_geometry))
     files["scene_obj"] = meshlab / "scene.obj"
     write_scene_obj(files["scene_obj"], points, colors, f_verts, f_tris, f_edges, cams, tube)
     verify(files)
 
     row = {"source": source or "", "input": input_rel, "n_vertices": len(vertices), "n_faces": len(faces),
-           "poisson_depth": cfg["poisson"]["depth"], "t_s": round(time.perf_counter() - t0, 3)}
+           "poisson_depth": cfg["poisson"]["depth"], "meshlab_unit": stage_io.scale_info(run_dir)[1],
+           "web_unit": web_unit, "web_frame": web_frame, "scene_extent": scene_extent,
+           "t_s": round(time.perf_counter() - t0, 3)}
     stage_io.log_metrics(log, row)
     stage_io.upsert_csv(Path(artifacts_dir) / "mesh.csv", row)
 
@@ -276,11 +310,14 @@ if __name__ == "__main__":
         g = glb.geometry[next(iter(glb.geometry))] if hasattr(glb, "geometry") else glb
         assert len(g.faces) > 0 and g.visual.kind == "vertex"
         sc = trimesh.load(str(run_dir / "exports/web/scene.glb"))
-        assert {"points", "frustums", "trajectory"} <= set(sc.geometry), set(sc.geometry)
+        assert {"points", "frustums", "frustum_faces", "trajectory"} <= set(sc.geometry), set(sc.geometry)
         assert len(sc.geometry["points"].vertices) == len(pts)
+        assert all(np.allclose(sc.graph[n][0], np.eye(4)) for n in sc.graph.nodes_geometry)  # baked, no node scale
+        assert np.isclose(np.ptp(sc.geometry["points"].vertices, axis=0).max(), np.ptp(pts, axis=0).max() / 100)
         row = stage_io.read_csv(art / "mesh.csv")[0]
         n_pre = len(np.load(run_dir / "mesh/poisson/pre/vertices.npy"))
         assert row["source"] == "sparse" and row["input"] == "poisson/pre" and int(row["n_vertices"]) == n_pre, row
         assert int(row["n_faces"]) > 0 and row["poisson_depth"] == "7", row
+        assert (row["meshlab_unit"], row["web_unit"], row["web_frame"]) == ("cm", "m", "camera_y_up"), row
         print(row)
     print("OK")
