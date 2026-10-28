@@ -33,7 +33,7 @@ from src.cloud import clean, floorplan, planes
 from src.dense import compare as dense_compare, openmvs, patch_match
 from src.dense import casmvsnet, mapanything, mvsnet, patchmatchnet, plane_sweep, sgm, vggt_omega
 from src.epipolar import two_view
-from src.evaluation import ablation, hard_regions, lidar, loop_drift, metric_error, photo_vs_render, reprojection
+from src.evaluation import ablation, detector_choice, hard_regions, lidar, loop_drift, metric_error, photo_vs_render, reprojection
 from src.export import meshlab
 from src.gs import gaussian_splatting
 from src.mesh import close_holes, liepa, mesh, poisson, room_fill
@@ -140,6 +140,7 @@ def main():
 
     if cfg.matching.enabled and cfg.geometry.enabled:
         stage("matching_metrics", matching_metrics.run, run_dir, artifacts_dir)
+        stage("detector_choice", detector_choice.run, cfg.model_dump(), run_dir, artifacts_dir)  # T2 2.3
         if cfg.visualize.matches.enabled:  # off by default: `samples` figures per detector
             matches_visualize_cfg = cfg.visualize.matches.model_dump()
             stage(

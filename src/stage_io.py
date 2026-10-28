@@ -116,7 +116,7 @@ CONFIG_DIRS = (".", "configs", "configs/experiments")  # repo-root folders searc
 
 def config_arg(description: str, argv=None) -> str:
     """Config path from the command line: positional `<config>.yaml` or `--config <path>` (not both);
-    neither -> configs/default.yaml."""
+    neither -> config_gpu.yaml (T2 GPU flow, kitchen)."""
 
     import argparse
 
@@ -128,7 +128,7 @@ def config_arg(description: str, argv=None) -> str:
     if args.config and args.config_opt:
         parser.error("give the config once: positional or --config")
 
-    return args.config_opt or args.config or "configs/default.yaml"
+    return args.config_opt or args.config or "config_gpu.yaml"
 
 def find_config(config_arg, caller, repo_root) -> Path | None:
     """Absolute path as given; a relative one is tried in the caller's directory, then in the repo root,

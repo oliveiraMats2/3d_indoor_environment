@@ -257,6 +257,9 @@ dense:                        # src/dense (patch_match.py, openmvs.py)
     resolution_level: 1       # 0 = full resolution, 1 = half, ...
     number_views: 5           # neighbour views per depth map (0 = all)
     max_threads: 0            # 0 = all cores
+  vggt_omega:
+    model: vggt_1b            # flow of this copy: VGGT-1B stands in for VGGT-Omega until access to the gated facebook/VGGT-Omega (hf auth login) | vggt_omega
+    checkpoint: null          # local VGGT-Omega .pt (skips the Hugging Face download)
   mapanything:
     voxel: 0.04               # flow of this copy: ~1 cm (auto = ~5 cm)
 
@@ -361,7 +364,7 @@ evaluation:                   # src/evaluation
   measurements_file: configs/measurements/kitchen_my_home.yaml  # flow of this copy: wall lengths (tape)
   metric_scale: leave_one_out  # flow of this copy: each wall scaled by the OTHER walls (the outline scale is fitted on them)
   ablation_runs: []           # run ids to compare (configs/experiments/ablation.yaml)
-  loop_closed: null           # unknown for this video | false | true # dataset of this copy
+  loop_closed: true           # T2 room protocol: the walk ends where it started (loop_drift also detects it) | null = unknown | false
   hard_regions: true          # smooth vs textured wall reprojection (needs planes)
   texture_radius_px: 30       # radius of local keypoint density
   texture_split_quantile: 0.5 # texture quantile splitting smooth_wall / textured_wall

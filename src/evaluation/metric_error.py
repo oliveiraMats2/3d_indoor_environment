@@ -23,23 +23,27 @@
 #   e = |L_hat - L| / L (T2 items 5.2, 5.A.1).
 # In:  evaluation.measured_cm (list of {name, value_cm}) and/or evaluation.measurements_file (YAML with
 #      paredes_cm|walls_cm: {name: cm} and pe_direito_cm|ceiling_height_cm: cm or null);
-#      planes/{T_floor,floor,ceiling}.npy, mesh/room_fill/{T_room,footprint_cm}.npy,
+#      planes/{T_floor,floor,ceiling,walls}.npy, mesh/room_fill/{T_room,footprint_cm}.npy,
 #      clean/<room_fill.source>/points.npy (fallback clean/<planes.source>, clean/sparse), scale/scale.npy,
 #      artifacts floorplan.csv (only for the legacy names room_width / room_length).
 # Out: artifacts metric_error.csv (name, value_cm, model_cm, abs_error_cm, rel_error, scale_source, held_out,
-#      model_units, cm_per_unit, method, model_extent_cm); results/<run_id>/evaluation/metric_errors.npy (K, 2):
+#      model_units, cm_per_unit, method, model_extent_cm, lines); results/<run_id>/evaluation/metric_errors.npy (K, 2):
 #      abs_error_cm, rel_error (NaN when unknown) and metric_model_cm.npy (K,).
 # YAML: evaluation.{measured_cm, measurements_file: null, metric_scale: auto|scale|leave_one_out}
 # Rules:
 # - Kinds: room_width / room_length -> floorplan.csv width_cm / length_cm (legacy, scale_source floorplan);
 #   ceiling_height / pe_direito -> model floor-ceiling distance; any other name is a wall, matched to an
 #   edge of the fitted room_fill outline (footprint_cm.npy) by its length (assignment, |dL|/L < MATCH_TOL).
-# - Wall model length (model units, floor frame p' = T_floor p): wall points = room_fill.wall_band of the
-#   robust height range; each is assigned to the nearest outline edge (outline placed with T_floor @ T_room)
-#   when closer than BAND_CM (tolerance only); per edge a robust line (PCA + MAD trimming) is refit from its
-#   own points; length = distance between its corners with the two neighbour lines (method corners), else
-#   (near-parallel neighbour or neighbour without points) the p2-p98 extent along the line (method extent).
-#   model_extent_cm (always the p2-p98 extent) is a diagnostic: it is short where corners are occluded.
+# - Wall model length (model units, floor frame p' = T_floor p, outline placed with T_floor @ T_room; the
+#   outline only says which line is which wall and who its neighbours are, its scale is never used): the line
+#   of each outline edge is the planes wall (planes/walls.npy, full-height RANSAC) within PLANE_DEG / PLANE_CM
+#   of the edge (one plane per edge, assignment), else a robust line (PCA + MAD trimming) refit from the wall
+#   points (room_fill.wall_band of the robust height range) assigned to that edge within BAND_CM. A short or
+#   occluded wall (e.g. the 135 deg door chamfer) still has its plane, so its neighbours keep their corners.
+#   length = distance between its corners with the two neighbour lines (method corners); without a line for
+#   the wall or a neighbour, or with a near-parallel neighbour (MIN_SIN), the wall is NOT measured (NaN, method
+#   empty, WARNING): a partial extent is not a length. lines = source of (previous, own, next) line, plane|band.
+#   model_extent_cm (p2-p98 extent of the edge points) is a diagnostic: it is short where corners are occluded.
 # - Scale (cm per working unit), in order: scale/scale.npy known (working unit = cm, k = 1, source scale)
 #   > leave-one-out: for each wall, k from the OTHER matched walls measured corner to corner, k = median(L_j / u_j)
 #   (robust to one badly reconstructed wall), source leave_one_out, held_out true. The room_fill scale is fitted
@@ -65,12 +69,14 @@ log = logging.getLogger(__name__)
 COLUMNS = {"room_width": "width_cm", "room_length": "length_cm"}   # legacy floorplan.csv names
 CEILING = ("ceiling_height", "pe_direito")
 FIELDS = ["name", "value_cm", "model_cm", "abs_error_cm", "rel_error", "scale_source", "held_out",
-          "model_units", "cm_per_unit", "method", "model_extent_cm"]
+          "model_units", "cm_per_unit", "method", "model_extent_cm", "lines"]
 MEASURED_SCALE = ("outline", "room_fill", "measurements")   # scale.method values fitted on these walls
 MATCH_TOL = 0.10        # max |edge - L| / L when matching a measured wall to an outline edge
 BAND_CM = 15.0          # wall point -> edge assignment distance (cm, through the room_fill fit scale)
 MIN_EDGE_POINTS = 30    # fewer points -> no model length for that wall
-MIN_SIN = 0.3           # neighbour lines closer than ~17 deg to parallel -> extent instead of corners
+MIN_SIN = 0.3           # neighbour lines closer than ~17 deg to parallel -> wall not measured
+PLANE_DEG = 15.0        # max angle between a planes wall and the outline edge it is matched to
+PLANE_CM = 30.0         # max distance (cm, through the room_fill fit scale) from the edge midpoint to that wall
 
 def load_measures(ev: dict) -> list[dict]:
     """{name, value_cm (float or None)} from measured_cm and measurements_file (file wins on repeated names)."""
@@ -142,9 +148,40 @@ def intersect(l1, l2) -> np.ndarray | None:
 
     return c1 + a * d1
 
+def plane_lines(pl: Path, T: np.ndarray, poly: np.ndarray, s_fit: float) -> list:
+    """Per outline edge the planes wall line (centre, unit direction) in the floor frame, None without a match."""
+
+    lines = [None] * len(poly)
+    if not (pl / "walls.npy").exists():
+        return lines
+    cands = []
+    for w in np.load(pl / "walls.npy").reshape(-1, 4):      # n.x + d = 0 -> (Rn).p' + d - (Rn).t = 0
+        n = T[:3, :3] @ w[:3]
+        c = w[3] - n @ T[:3, 3]
+        k = np.linalg.norm(n[:2])
+        if k > 1e-6:
+            n2 = n[:2] / k
+            cands.append((-c / k * n2, np.array([-n2[1], n2[0]])))
+    if not cands:
+        return lines
+    cost = np.full((len(poly), len(cands)), 1e9)
+    for i in range(len(poly)):
+        a, b = poly[i], poly[(i + 1) % len(poly)]
+        e = (b - a) / np.linalg.norm(b - a)
+        for j, (c, d) in enumerate(cands):
+            dist = abs(((a + b) / 2 - c) @ np.array([-d[1], d[0]]))
+            if abs(e @ d) > np.cos(np.radians(PLANE_DEG)) and dist < PLANE_CM * s_fit:
+                cost[i, j] = dist
+    for i, j in zip(*linear_sum_assignment(cost)):
+        if cost[i, j] < 1e9:
+            lines[i] = cands[j]
+
+    return lines
+
 def wall_lengths(cfg: dict, run_dir: Path) -> dict | None:
-    """Per outline edge: (cm length of the hand outline edge, model units length, method, extent units),
-    the fit scale (units per cm) and the floor-frame points inside the outline; None when inputs are missing."""
+    """Per outline edge: (cm length of the hand outline edge, model units length (NaN when not measured), method,
+    extent units, line sources), the fit scale (units per cm) and the floor-frame points inside the outline; None
+    when inputs are missing."""
 
     rf, pl = run_dir / "mesh" / "room_fill", run_dir / "planes"
     need = [rf / "T_room.npy", rf / "footprint_cm.npy", pl / "T_floor.npy"]
@@ -172,23 +209,23 @@ def wall_lengths(cfg: dict, run_dir: Path) -> dict | None:
     near = dist < BAND_CM * s_fit
 
     n = len(poly)
-    lines = [fit_line(wall[near & (edge == i)]) for i in range(n)]
+    band = [fit_line(wall[near & (edge == i)]) for i in range(n)]
+    lines = plane_lines(pl, T, poly, s_fit)
+    source = ["plane" if lines[i] is not None else "band" if band[i] is not None else "none" for i in range(n)]
+    lines = [lines[i] if lines[i] is not None else band[i] for i in range(n)]
     edges = []
     for i in range(n):
         L_cm = float(np.linalg.norm(poly_cm[(i + 1) % n] - poly_cm[i]))
-        if lines[i] is None:
-            edges.append((L_cm, float("nan"), "", float("nan")))
-            continue
-        c, d = lines[i]
-        proj = (wall[near & (edge == i)] - c) @ d
-        extent = float(np.subtract(*np.percentile(proj, [98, 2])))
+        own = wall[near & (edge == i)]
+        extent = float("nan")
+        if lines[i] is not None and len(own):
+            extent = float(np.subtract(*np.percentile((own - lines[i][0]) @ lines[i][1], [98, 2])))
         prev, nxt = lines[i - 1], lines[(i + 1) % n]
-        a = intersect(lines[i], prev) if prev is not None else None
-        b = intersect(lines[i], nxt) if nxt is not None else None
-        if a is not None and b is not None:
-            edges.append((L_cm, float(np.linalg.norm(b - a)), "corners", extent))
-        else:
-            edges.append((L_cm, extent, "extent", extent))
+        a = intersect(lines[i], prev) if lines[i] is not None and prev is not None else None
+        b = intersect(lines[i], nxt) if lines[i] is not None and nxt is not None else None
+        ok = a is not None and b is not None
+        edges.append((L_cm, float(np.linalg.norm(b - a)) if ok else float("nan"), "corners" if ok else "", extent,
+                      "/".join(source[k % n] for k in (i - 1, i, i + 1))))
 
     room = inside(poly, pf[:, :2]) & (pf[:, 2] > 0)
     return {"edges": edges, "s_fit": s_fit, "T": T, "z_room": pf[room, 2]}
@@ -261,7 +298,7 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
     walls = [m for m in measures if kind[m["name"]] == "wall" and m["value_cm"]]
     need_geo = bool(walls) or any(k == "ceiling" for k in kind.values())
     geo = wall_lengths(cfg, run_dir) if need_geo else None
-    u = {}                                       # name -> (model units, method, extent units)
+    u = {}                                       # name -> (model units, method, extent units, line sources)
     if walls and geo is not None:
         e_len = np.array([e[0] for e in geo["edges"]])
         L = np.array([m["value_cm"] for m in walls])
@@ -275,12 +312,13 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
                 log.warning("metric_error: wall %s (%.1f cm) matches no room_fill outline edge", m["name"], m["value_cm"])
 
     names = [m["name"] for m in walls if m["name"] in u and np.isfinite(u[m["name"]][0])]
-    corner = [n for n in names if u[n][1] == "corners"]  # both ends found: the extent fallback is not a length
-    names = corner if len(corner) >= 2 else names
     Lw = {m["name"]: m["value_cm"] for m in walls}
     k_all = 1.0 if metric else scale_from(np.array([Lw[n] for n in names]), np.array([u[n][0] for n in names]))
     for name in u:
-        units, method, extent = u[name]
+        units, method, extent, sources = u[name]
+        if not np.isfinite(units):
+            log.warning("metric_error: wall %s not measured reliably (lines prev/own/next: %s; no line or a "
+                        "near-parallel neighbour): no model length", name, sources)
         if metric:
             k, src = 1.0, "scale"
         else:
@@ -295,7 +333,7 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
         rows[name].update(scale_source=src, held_out=str(not circular).lower(), method=method,
                           model_units=f"{units:.6g}" if np.isfinite(units) else "",
                           cm_per_unit=f"{k:.6g}" if np.isfinite(k) else "",
-                          model_extent_cm=f"{extent * k:.2f}" if np.isfinite(extent * k) else "")
+                          model_extent_cm=f"{extent * k:.2f}" if np.isfinite(extent * k) else "", lines=sources)
 
     # ceiling height
     for name in [n for n, k in kind.items() if k == "ceiling"]:
@@ -411,6 +449,27 @@ if __name__ == "__main__":
             assert abs(float(rows[n]["cm_per_unit"]) - 1 / 0.0367) < 0.3
         h = rows["ceiling_height"]
         assert h["value_cm"] == "" and h["abs_error_cm"] == "" and abs(float(h["model_cm"]) - 250) < 3, h
+
+        # 2b. chamfer (porta) without wall points: its planes wall keeps every wall measured corner to corner;
+        #     without that plane porta and its two neighbours are not measured (NaN), never a partial extent
+        T_floor = np.load(run_dir / "planes/T_floor.npy")
+        pts = np.load(run_dir / "clean/patch_match/points.npy")
+        a, b = poly[3], poly[4]
+        nrm = np.array([-(b - a)[1], (b - a)[0]]) / np.linalg.norm(b - a)
+        xy = (pts @ T_floor[:3, :3].T + T_floor[:3, 3])[:, :2] / 0.0367
+        np.save(run_dir / "clean/patch_match/points.npy", pts[np.abs((xy - a) @ nrm) > 10])
+        p_floor = np.r_[np.r_[nrm, 0] , -(nrm @ a) * 0.0367]               # plane in the floor frame (units)
+        np.save(run_dir / "planes/walls.npy", np.r_[T_floor[:3, :3].T @ p_floor[:3],
+                                                     p_floor[3] + p_floor[:3] @ T_floor[:3, 3]][None])
+        rows = {r["name"]: r for r in stage_io.read_csv(run(cfg, str(run_dir), str(art)))}
+        assert rows["porta"]["lines"] == "band/plane/band", rows["porta"]
+        for n in ("janela", "pia_fogao", "porta_lado_pia", "porta", "geladeiras"):
+            assert rows[n]["method"] == "corners" and float(rows[n]["abs_error_cm"]) < 2.0, rows[n]
+        (run_dir / "planes/walls.npy").unlink()
+        rows = {r["name"]: r for r in stage_io.read_csv(run(cfg, str(run_dir), str(art)))}
+        for n in ("porta_lado_pia", "porta", "geladeiras"):
+            assert rows[n]["model_cm"] == "" and rows[n]["method"] == "", rows[n]
+        assert rows["janela"]["method"] == "corners" and float(rows["janela"]["abs_error_cm"]) < 2.0, rows["janela"]
 
         # 3. metric scale.npy: working unit is cm, k = 1; a scale stretched by 2% shows up as ~2% error
         run_dir, art, _ = synthetic_run(tmp / "metric", units_per_cm=1.02)

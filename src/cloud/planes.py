@@ -25,8 +25,8 @@
 #      planes/T_floor.npy (4,4), planes/labels.npy (P,) int (-1 none, 0 floor, 1 ceiling, 2+k wall k);
 #      artifacts: planes.csv (plane, type, a, b, c, d, n_inliers, inlier_frac, height, height_cm, + wall
 #      segment x0 y0 x1 y1 in the floor frame, length, height_span, behind_frac, n_merged),
-#      wall_angles.csv (pair, wall_i, wall_j, angle_deg, error_to_90_deg, normal_angle_deg, corner_x,
-#      corner_y, gap_i, gap_j).
+#      wall_angles.csv (pair, wall_i, wall_j, angle_deg, expected_deg, error_deg, error_to_90_deg, normal_angle_deg,
+#      corner_x, corner_y, gap_i, gap_j, link).
 # YAML: planes: {enabled, source: sparse, distance_cm, ransac_n, iterations, max_walls, min_inlier_frac,
 #       angle_tol_deg, max_planes, wall_distance_cm, wall_rounds, wall_min_inlier_frac, wall_min_rel,
 #       wall_band, wall_min_height_frac, wall_max_behind_frac, merge_angle_deg, merge_offset_frac,
@@ -53,9 +53,14 @@
 # - T_floor: rotation taking the floor normal to +z, then a rotation about z putting the largest wall
 #   normal on +x, translation putting the floor at z = 0. Identity + WARNING without a floor.
 # - Wall angles: only NEIGHBOURING walls: inward normals differ by neighbour_min_deg..180-neighbour_min_deg
-#   (never parallel or opposite walls) and both inlier segments (2nd-98th percentile along the wall) reach
-#   the corner (intersection of the two lines) within corner_gap_frac * room size. angle_deg = interior
-#   corner angle = 180 - angle between inward normals, in [0, 180]; error_to_90_deg = |angle_deg - 90|.
+#   (never parallel or opposite walls). Each wall has two ends (side of its segment centre the corner falls on)
+#   and one neighbour per end: pairs whose inlier segments (2nd-98th percentile along the wall) both reach the
+#   corner (intersection of the two lines) within corner_gap_frac * room size are corners (link gap); then the
+#   wall ends still free are paired greedily by increasing gap up to END_GAP_FRAC * room size (link end: a short
+#   or occluded wall, e.g. a chamfer, sees only part of its length). angle_deg = interior corner angle = 180 -
+#   angle between inward normals, in [0, 180]; expected_deg = nearest NOMINAL_DEG (90 or the 135 deg chamfer),
+#   error_deg = |angle_deg - expected_deg|; error_to_90_deg = |angle_deg - 90| only for expected 90 (walls that
+#   should be orthogonal), empty otherwise.
 # - Room size = largest 2nd-98th percentile extent of the wall candidate points in the top view.
 # - height_cm is empty when the scale is unknown (unit = model).
 
@@ -76,6 +81,8 @@ log = logging.getLogger(__name__)
 DEFAULTS = {"wall_distance_cm": 4.0, "wall_rounds": 40, "wall_band": [0.4, 0.95], "wall_min_inlier_frac": 0.005,
             "wall_min_rel": 0.08, "wall_min_height_frac": 0.3, "wall_max_behind_frac": 1.5, "merge_angle_deg": 10.0,
             "merge_offset_frac": 0.04, "segment_gap_frac": 0.08, "neighbour_min_deg": 30.0, "corner_gap_frac": 0.15}
+NOMINAL_DEG = (90.0, 135.0)   # designed interior corner angles: square corner, 45 deg chamfer
+END_GAP_FRAC = 0.5            # max corner gap (x room size) when pairing the free ends of short walls
 
 def load_points(run_dir: Path, source: str) -> np.ndarray | None:
 
@@ -374,10 +381,11 @@ def detect_walls(points: np.ndarray, up: np.ndarray, exclude: np.ndarray, floor_
 
     return out
 
-def wall_angles(walls: list[dict], neighbour_min_deg: float, gap_max: float) -> list[dict]:
-    """Interior corner angle between neighbouring walls: non-parallel normals and segments meeting at a corner."""
+def wall_angles(walls: list[dict], neighbour_min_deg: float, gap_max: float, end_gap_max: float) -> list[dict]:
+    """Interior corner angle between neighbouring walls: non-parallel normals, one neighbour per wall end; segments
+    meeting at the corner first, then the free ends of short walls by increasing gap."""
 
-    rows = []
+    cands = []
     for i in range(len(walls)):
         for j in range(i + 1, len(walls)):
             li, lj = walls[i]["line"], walls[j]["line"]
@@ -385,19 +393,31 @@ def wall_angles(walls: list[dict], neighbour_min_deg: float, gap_max: float) -> 
             if not neighbour_min_deg <= between <= 180.0 - neighbour_min_deg:
                 continue
             corner = np.linalg.solve(np.stack([li[:2], lj[:2]]), -np.array([li[2], lj[2]]))
-            gaps = []
-            for w in (walls[i], walls[j]):
-                n = w["line"][:2]
+            gaps, ends = [], []
+            for k in (i, j):
+                n = walls[k]["line"][:2]
                 t = corner @ np.array([-n[1], n[0]])
-                gaps.append(max(0.0, w["lo"] - t, t - w["hi"]))
-            if max(gaps) > gap_max:
+                gaps.append(max(0.0, walls[k]["lo"] - t, t - walls[k]["hi"]))
+                ends.append((k, bool(t > (walls[k]["lo"] + walls[k]["hi"]) / 2)))   # (wall, end the corner is on)
+            cands.append((max(gaps), i, j, between, corner, gaps, ends))
+    cands.sort(key=lambda c: c[0])
+
+    rows, used, done = [], set(), set()
+    for link, limit in (("gap", gap_max), ("end", end_gap_max)):
+        for g, i, j, between, corner, gaps, ends in cands:
+            if g > limit or (i, j) in done or (link == "end" and used & set(ends)):
                 continue
+            done.add((i, j))
+            used |= set(ends)
             angle = 180.0 - between
+            expected = min(NOMINAL_DEG, key=lambda a: abs(angle - a))
             rows.append({"pair": f"wall_{i}__wall_{j}", "wall_i": f"wall_{i}", "wall_j": f"wall_{j}",
-                         "angle_deg": round(angle, 3), "error_to_90_deg": round(abs(angle - 90.0), 3),
+                         "angle_deg": round(angle, 3), "expected_deg": expected,
+                         "error_deg": round(abs(angle - expected), 3),
+                         "error_to_90_deg": round(abs(angle - 90.0), 3) if expected == 90.0 else "",
                          "normal_angle_deg": round(between, 3), "corner_x": round(float(corner[0]), 4),
                          "corner_y": round(float(corner[1]), 4), "gap_i": round(gaps[0], 4),
-                         "gap_j": round(gaps[1], 4)})
+                         "gap_j": round(gaps[1], 4), "link": link})
 
     return rows
 
@@ -531,12 +551,14 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str, debug: dict | None = None) 
     angles_csv.unlink(missing_ok=True)
     room = wd["room_size"]
     angles = wall_angles([{"line": w["line_f"], "lo": w["lo"], "hi": w["hi"]} for w in vertical],
-                         pc["neighbour_min_deg"], pc["corner_gap_frac"] * room) if np.isfinite(room) else []
+                         pc["neighbour_min_deg"], pc["corner_gap_frac"] * room, END_GAP_FRAC * room) \
+        if np.isfinite(room) else []
     for row in angles:
         stage_io.upsert_csv(angles_csv, row, key="pair")
-        stage_io.log_metrics(log, {f"{row['pair']}_{k}": row[k] for k in ("angle_deg", "error_to_90_deg")})
+        stage_io.log_metrics(log, {f"{row['pair']}_{k}": row[k] for k in ("angle_deg", "expected_deg", "error_deg")})
 
-    errors = [r["error_to_90_deg"] for r in angles]
+    errors = [r["error_deg"] for r in angles]
+    errors_90 = [r["error_to_90_deg"] for r in angles if r["error_to_90_deg"] != ""]
     room_height = height_of(ceiling[1]) if ceiling is not None else ("", "")
     summary = {"n_planes_found": len(found), "n_horizontal": len(horizontal), "n_wall_lines": wd["n_lines"],
                "n_walls": len(vertical), "n_wall_pairs": len(angles),
@@ -545,6 +567,9 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str, debug: dict | None = None) 
                "wall_angles_deg": " ".join(f"{r['angle_deg']:.1f}" for r in angles),
                "wall_angle_error_mean_deg": round(float(np.mean(errors)), 3) if errors else "",
                "wall_angle_error_max_deg": round(float(np.max(errors)), 3) if errors else "",
+               "n_wall_pairs_90": len(errors_90),
+               "wall_angle_error90_mean_deg": round(float(np.mean(errors_90)), 3) if errors_90 else "",
+               "wall_angle_error90_max_deg": round(float(np.max(errors_90)), 3) if errors_90 else "",
                "unlabelled_frac": round(float((labels < 0).mean()), 4)}
     stage_io.log_metrics(log, summary)
 
@@ -620,7 +645,7 @@ if __name__ == "__main__":
         assert abs(np.median(z[4000:8000]) - H) < 2.0
 
         angles = stage_io.read_csv(ad / "wall_angles.csv")
-        errors = sorted(float(r["error_to_90_deg"]) for r in angles)
+        errors = sorted(float(r["error_to_90_deg"]) for r in angles)   # rectangle: every corner expected 90
         assert len(angles) == 4 and abs(errors[-1] - 5.0) < 1.0, angles
         assert sum(abs(e - 5.0) < 1.0 for e in errors) == 2 and errors[0] < 1.0, angles
         labels = np.load(rd / "planes/labels.npy")
@@ -657,5 +682,9 @@ if __name__ == "__main__":
         angles = sorted(float(r["angle_deg"]) for r in stage_io.read_csv(ad / "wall_angles.csv"))
         assert len(angles) == 5, angles
         assert all(abs(a - e) < 2.0 for a, e in zip(angles, [90, 90, 90, 135, 135])), angles
+        rows = stage_io.read_csv(ad / "wall_angles.csv")
+        assert sorted(float(r["expected_deg"]) for r in rows) == [90, 90, 90, 135, 135], rows
+        assert all(float(r["error_deg"]) < 2.0 for r in rows) and sum(r["error_to_90_deg"] == "" for r in rows) == 2
+        assert summary["n_wall_pairs_90"] == 3 and summary["wall_angle_error_max_deg"] < 2.0, summary
         print(angles)
     print("OK")

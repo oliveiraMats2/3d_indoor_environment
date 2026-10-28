@@ -143,12 +143,36 @@ for t in vggt mast3r_sfm instantsfm glomap; do .venv-gpu/bin/python main.py pare
 loading (VGGT 5 GB, MASt3R 2.7 GB). On 20 frames the speed gap does not show; it grows with the frame count
 (the incremental mapper is superlinear).
 
-## GPU bundle adjustment in COLMAP itself (Ceres 2.3 + cuDSS), not done
+## The two T2 flows (`flow: cpu | gpu`)
 
-Rebuilding COLMAP with a CUDA Ceres takes 1-2 h and can break the `colmap` micromamba env. Steps, when wanted:
+The top-level key `flow` (src/flows.py) picks the SfM path; densification, mesh, scale and evaluation are shared.
+Keys written in the YAML win over the preset.
 
-1. CUDA toolkit >= 12.8 and cuDSS (NVIDIA, `libcudss` 0.5+) installed under a prefix, e.g. `~/opt/cuda-12.8`.
-2. Ceres Solver 2.3 from source: `cmake -DUSE_CUDA=ON -DCUDSS_DIR=... -DCMAKE_CUDA_ARCHITECTURES=120`, install to `~/opt/ceres`.
-3. COLMAP 4.x from source against that Ceres: `cmake -DCUDA_ENABLED=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DCeres_DIR=~/opt/ceres/lib/cmake/Ceres`.
-4. Point `sfm.colmap_bin` to the new binary and set `sfm.ba_use_gpu: true` (Mapper.ba_use_gpu / GlobalMapper.ba_ceres_use_gpu).
-5. Expected gain ~1.5-3x in the BA share of the mapper time.
+| | `flow: cpu` | `flow: gpu` |
+|---|---|---|
+| config | `configs/kitchen_my_home_cpu.yaml` | `config_gpu.yaml` (= `configs/kitchen_my_home_gpu.yaml`, same run id) |
+| run | `./run.sh` (no argument = this config) | `python3 main.py` (no argument = `config_gpu.yaml`) |
+| SfM | COLMAP SIFT (GPU) + incremental mapper, Ceres BA on the CPU | COLMAP SIFT (GPU) + GLOMAP `global_mapper`, global positioning + BA on the GPU in the `t2/colmap-cudss:4.2.0` container |
+| SIFT | twice: OpenCV SIFT in the 2D comparison (detection/matching/epipolar, with ORB and AKAZE) and COLMAP SIFT for SfM | same |
+| dense | `patch_match` only (light) | all `dense.methods` (patch_match, openmvs, plane_sweep, sgm, casmvsnet, mvsnet, patchmatchnet, vggt_omega, mapanything) |
+| ablation | `configs/experiments/kitchen_abl_*.yaml` (exhaustive, sequential with/without loop, 100/200 frames) + `kitchen_ablation.yaml` | - |
+| Gaussian Splatting | off | on |
+
+What stays on the CPU in both flows (CPU-only algorithms in COLMAP/Open3D): rotation averaging, track building and
+retriangulation of GLOMAP, `stereo_fusion`, Poisson, `close_holes`, `liepa`, `room_fill`, evaluation. Open3D
+cleanup uses `cleanup.device: CPU:0` on purpose (all cleanups take ~4 s; the VRAM is kept for Gaussian Splatting).
+
+## GPU bundle adjustment in COLMAP itself (Ceres 2.3 + cuDSS): `docker/colmap-cudss`
+
+The conda COLMAP links a Ceres without cuDSS, so `GlobalMapper.gp_use_gpu` / `ba_ceres_use_gpu` fall back to the
+CPU. `docker/colmap-cudss/Dockerfile` builds COLMAP 4.2.0 against Ceres 2.3 with CUDA + cuDSS for sm_120:
+
+```bash
+docker build -t t2/colmap-cudss:4.2.0 docker/colmap-cudss   # once (~1 h); needs the NVIDIA container toolkit
+```
+
+`flow: gpu` sets `sfm.container: t2/colmap-cudss:4.2.0`, `container_steps: [mapper]` and
+`container_ba_use_gpu: true` (src/sfm/container.py runs the step with `--gpus all`, the workspace bind-mounted).
+Check in the run log: `colmap_info docker:t2/colmap-cudss:4.2.0: version 4.2, CUDA build True, GPU visible True`,
+and no "falling back to CPU" in `exports/colmap/colmap.log`. Kitchen (270 frames): global positioning 10.4 s,
+iterative BA 4.3 s.
