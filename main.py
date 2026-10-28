@@ -140,7 +140,6 @@ def main():
 
     if cfg.matching.enabled and cfg.geometry.enabled:
         stage("matching_metrics", matching_metrics.run, run_dir, artifacts_dir)
-        stage("detector_choice", detector_choice.run, cfg.model_dump(), run_dir, artifacts_dir)  # T2 2.3
         if cfg.visualize.matches.enabled:  # off by default: `samples` figures per detector
             matches_visualize_cfg = cfg.visualize.matches.model_dump()
             stage(
@@ -243,6 +242,8 @@ def main():
 
     report_cfg = cfg.report.model_dump()
     stage("report", relatorio.run, report_cfg, run_dir, ext.output_dir, artifacts_dir)
+    if cfg.matching.enabled and cfg.geometry.enabled:  # T2 2.3: reads the report and two_view CSVs
+        stage("detector_choice", detector_choice.run, cfg.model_dump(), run_dir, artifacts_dir)
 
 if __name__ == "__main__":
     main()
