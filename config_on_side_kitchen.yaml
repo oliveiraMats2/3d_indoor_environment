@@ -286,7 +286,7 @@ poisson:                      # src/mesh/poisson.py (Open3D)
   depth: 10                   # octree depth (higher = finer, slower)
   density_quantile: 0.0       # keep: no trimming | drop vertices with Poisson density below this quantile
   normal_knn: 30              # neighbours for normal estimation
-  threads: 8                  # Poisson threads (-1 = all cores; much slower on many-core machines)
+  threads: 32                 # dataset of this copy: all 32 cores | Poisson threads (-1 = all cores)
   method: [null, openmvs, plane_sweep, sgm, casmvsnet, mvsnet, patchmatchnet, vggt_omega, mapanything]  # one mesh per method (null = default)
 
 close_holes:                  # src/mesh/close_holes.py (pymeshlab, MeshLab "Close Holes"; no pymeshlab -> WARNING, skipped)
