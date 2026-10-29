@@ -1,0 +1,284 @@
+run:
+  id: video4_pre
+  output_root: null
+  artifacts_root: null
+  seed: 42
+  log_level: INFO
+  overwrite: false
+  cache: true
+extraction:
+  rerun: false
+  video: video4.mp4
+  output_dir: null
+  tag: null
+  selection: all
+  min_frames: 100
+  max_frames: 300
+  overlap: 0.7
+  overlap_min: 0.6
+  overlap_max: 0.8
+  overlap_step: 0.025
+  max_adjust_iters: 12
+  stride: 1
+  analysis_width: 640
+  nfeatures: 1000
+  lowe_ratio: 0.75
+  min_good_matches: 15
+  ransac_threshold_px: 3.0
+  min_inliers: 12
+  sharp_percentile: 25
+  max_side: 854
+  image_format: png
+  jpeg_quality: 95
+  blur:
+    enabled: true
+    coef_min: 0.5
+    motion_ratio_max: 4.0
+    keep_for_sfm_only: false
+    window: 9
+    discard_width: 640
+    discard_jpeg_quality: 90
+frame_quality:
+  resize_width: 640
+  blur:
+    laplacian_var_min: 100.0
+    relative_to_median: 0.5
+  exposure:
+    mean_min: 40
+    mean_max: 215
+    clipped_max_frac: 0.05
+  contrast:
+    std_min: 20.0
+  texture:
+    min_keypoints: 300
+    fast_threshold: 20
+detection:
+  methods:
+  - sift
+  - orb
+  - akaze
+  nfeatures: 5000
+  reps: 10
+  warmup: 1
+  max_frames: 300
+report:
+  max_figures: 5
+  max_rows: 20
+filters:
+  lowe_ratio: 0.75
+  min_matches: 10
+matching:
+  enabled: true
+  name: brute_force
+  strategy: sequential
+  cross_check: false
+  reps: 10
+  warmup: 1
+  flann:
+    checks: 50
+    float_index:
+      algorithm: 1
+      trees: 5
+    binary_index:
+      algorithm: 6
+      table_number: 6
+      key_size: 12
+      multi_probe_level: 1
+geometry:
+  enabled: true
+  ransac:
+    method: USAC_MAGSAC
+    threshold_px: 1.0
+    confidence: 0.999
+    max_iters: 5000
+  intrinsics:
+    fx: null
+    fy: null
+    cx: null
+    cy: null
+visualize:
+  matches:
+    enabled: true
+    samples: 5
+    max_lines: 100
+    dpi: 150
+    format: png
+  epilines:
+    n_lines: 20
+    dpi: 150
+sfm:
+  enabled: true
+  rerun: false
+  colmap_bin: colmap
+  camera_model: OPENCV
+  single_camera: true
+  intrinsics: estimate
+  fixed_dist:
+  - 0
+  - 0
+  - 0
+  - 0
+  matcher: sequential
+  sequential_overlap: 10
+  loop_detection: false
+  vocab_tree: https://github.com/colmap/colmap/releases/download/3.11.1/vocab_tree_faiss_flickr100K_words256K.bin;vocab_tree_faiss_flickr100K_words256K.bin;96ca8ec8ea60b1f73465aaf2c401fd3b3ca75cdba2d3c50d6a2f6f760f275ddc
+  mapper: incremental
+  use_gpu: true
+  gpu_index: '0'
+  ba_use_gpu: false
+  max_image_size: 854
+  max_num_features: 8192
+  min_num_matches: 15
+  multiple_models: true
+  ba_global_max_num_iterations: null
+  ba_global_max_refinements: null
+  project_quality: high
+  link_images: auto
+  backend: pycolmap
+scale:
+  enabled: true
+  method: aruco
+  aruco_dict: DICT_4X4_50
+  marker_cm: null
+  min_parallax_deg: 1.0
+  manual_pairs: []
+  provisional_extent_cm: 500
+cleanup:
+  enabled: true
+  voxel_cm: 1.0
+  nb_neighbors: 20
+  std_ratio: 2.0
+  crop_percentiles:
+  - 1
+  - 99
+  device: CPU:0
+planes:
+  enabled: true
+  source: sparse
+  distance_cm: 2.0
+  ransac_n: 3
+  iterations: 2000
+  max_walls: 4
+  min_inlier_frac: 0.02
+  angle_tol_deg: 15
+  max_planes: 10
+floorplan:
+  enabled: true
+  cell_cm: 5.0
+  dpi: 150
+  fig_inches: 8.0
+  extent_percentiles:
+  - 1
+  - 99
+dense:
+  enabled: true
+  rerun: false
+  methods:
+  - patch_match
+  max_image_size: 1600
+  gpu_index: '0'
+  ref_step: 3
+  patch_match:
+    num_iterations: 2
+    window_radius: 5
+    num_samples: 15
+    num_src_images: 20
+    geom_consistency: false
+    cache_size: 12
+  fusion:
+    min_num_pixels: 5
+    max_reproj_error: 2.0
+    max_depth_error: 0.01
+    cache_size: 12
+  openmvs:
+    bin_dir: null
+    resolution_level: 1
+    number_views: 5
+    max_threads: 0
+dense_compare:
+  enabled: false
+gaussian_splatting:
+  enabled: false
+  rerun: false
+  repo_dir: ~/gaussian-splatting
+  python: ~/gaussian-splatting/.venv/bin/python
+  iterations: 30000
+  eval: true
+  resolution: -1
+  max_image_size: 1600
+  data_device: cpu
+  sh_degree: 3
+  gpu_index: '0'
+  timeout_s: null
+poisson:
+  enabled: true
+  source: dense
+  variants:
+  - pre
+  - raw
+  depth: 9
+  density_quantile: 0.05
+  normal_knn: 30
+  threads: 8
+close_holes:
+  enabled: true
+  variants:
+  - pre
+  - raw
+  max_hole_size: 30
+  min_component_frac: 0.01
+  self_intersection: true
+liepa:
+  enabled: false
+  input: poisson
+  max_hole_edges: 200
+  density: 1.4142135623730951
+  fairing: 2
+  max_refine_iters: 30
+mesh:
+  enabled: true
+  input: poisson
+  frustum_cm: 20
+  frustum_every: 5
+  trajectory_cm: 1.0
+export:
+  enabled: true
+  normals_k: 10
+  normals_smooth_iter: 0
+  poisson_depth: 10
+  poisson_samples_per_node: 1.5
+  poisson_point_weight: 4.0
+  isolated_diameter_frac: 0.1
+viewer:
+  enabled: false
+  cloud: sparse
+  seconds: 45
+  fps: 30
+  offscreen: auto
+  timeout_s: 1800
+  width: 1280
+  height: 720
+  frustum_cm: 20
+  point_size: 2.0
+  fov_deg: 60.0
+  orbit_radius_factor: 1.5
+  orbit_elevation_deg: 30.0
+  background:
+  - 1.0
+  - 1.0
+  - 1.0
+videos:
+  enabled: true
+  topdown_fps: 10
+  kept_vs_discarded: true
+  width: 960
+  codec: auto
+evaluation:
+  enabled: true
+  measured_cm: []
+  ablation_runs: []
+  loop_closed: null
+  hard_regions: true
+  texture_radius_px: 30
+  texture_split_quantile: 0.5
+  inlier_px: 2.0
