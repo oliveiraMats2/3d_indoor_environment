@@ -369,7 +369,7 @@ evaluation:                   # src/evaluation
   measurements_file: configs/measurements/kitchen_my_home.yaml  # flow of this copy: wall lengths (tape)
   metric_scale: leave_one_out  # flow of this copy: each wall scaled by the OTHER walls (the outline scale is fitted on them)
   ablation_runs: []           # run ids to compare (configs/experiments/ablation.yaml)
-  loop_closed: true           # T2 room protocol: the walk ends where it started (loop_drift also detects it) | null = unknown | false
+  loop_closed: null           # dataset of this copy: two walks merged (kitchen loop + one side), auto-detected | true | false
   hard_regions: true          # smooth vs textured wall reprojection (needs planes)
   texture_radius_px: 30       # radius of local keypoint density
   texture_split_quantile: 0.5 # texture quantile splitting smooth_wall / textured_wall
