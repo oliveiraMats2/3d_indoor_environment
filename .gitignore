@@ -48,4 +48,7 @@ results/
 
 # workspace of the kitchen_my_home_<technique>.yaml runs
 /kitchen_my_home/
+
+# workspace of on_side_kitchen.mov (config_on_side_kitchen*.yaml)
+/on_side_kitchen/
 third_party/
