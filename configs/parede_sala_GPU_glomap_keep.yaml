@@ -3,7 +3,7 @@
 #   dataset  : parede_sala.mov (iPhone 14 Pro Max, 8231 frames, 274.4 s, 30 fps, landscape 1920x1080, HEVC)
 #   output   : parede_sala_GPU/results/parede_sala_GPU_glomap_keep/, parede_sala_GPU/artifacts/parede_sala_GPU_glomap_keep/
 #   frames   : parede_sala_GPU/frames/keep_all/ (every stride-th frame, no blur/motion drop)
-#   run      : .venv-gpu/bin/python main.py parede_sala_GPU_glomap_keep.yaml (README-GPU.md)
+#   run      : .venv-gpu/bin/python main.py parede_sala_GPU_glomap_keep.yaml (README.md, GPU SfM techniques)
 #   parede_sala_GPU_glomap.yaml keeping the sparse regions (textureless wall) instead of filtering them:
 #   no blur/motion drop (the motion test flags plain wall + TV edge as motion blur), fusion min_num_pixels 3,
 #   no statistical outlier removal and no percentile crop, Poisson without density trimming, larger
@@ -15,7 +15,7 @@
 # 'dataset of this copy' differ. No inheritance: this file reads on its own.
 # =============================================================================
 # Single default experiment: one YAML = one experiment. Every key is validated by
-# main.py and unknown keys are rejected. Run: python3 main.py default.yaml (or ./run.sh default.yaml)
+# main.py and unknown keys are rejected. Run: python3 main.py default.yaml
 
 # Layout (<ws> = extraction.video without extension): <ws>/frames/<tag>/, <ws>/results/<id>/, <ws>/artifacts/<id>/
 
@@ -127,7 +127,7 @@ visualize:
 
 sfm:                          # src/sfm/colmap.py + convert.py (COLMAP >= 4.0 CLI; older -> WARNING, stage skipped)
   enabled: true
-  technique: glomap           # GPU copy | colmap | glomap | instantsfm | mast3r_sfm | vggt (README-GPU.md)
+  technique: glomap           # GPU copy | colmap | glomap | instantsfm | mast3r_sfm | vggt (README.md, GPU SfM techniques)
   rerun: false                # false + existing sparse/0/images.bin -> reuse the model
   colmap_bin: colmap          # not found -> WARNING, stage skipped
   camera_model: OPENCV        # fx,fy,cx,cy,k1,k2,p1,p2
@@ -163,7 +163,7 @@ sfm:                          # src/sfm/colmap.py + convert.py (COLMAP >= 4.0 CL
     ba: false                 # extra pycolmap BA after retriangulating with its poses (it already ran its GPU BA)
     min_points_per_image: 50  # images seeing fewer 3D points are deregistered
   mast3r_sfm:                 # src/sfm/mast3r_sfm.py: MASt3R pairs + sparse global alignment (CC BY-NC-SA 4.0)
-    repo_dir: ~/mast3r        # git clone --recursive https://github.com/naver/mast3r (README-GPU.md)
+    repo_dir: ~/mast3r        # git clone --recursive https://github.com/naver/mast3r (README.md, GPU SfM techniques)
     weights: naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric  # official checkpoint (Hugging Face hub)
     retrieval_url: https://download.europe.naverlabs.com/ComputerVision/MASt3R  # official retrieval .pth + codebook
     weights_dir: ~/.cache/mast3r

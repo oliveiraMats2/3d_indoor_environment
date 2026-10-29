@@ -1,96 +1,125 @@
 # 3D Indoor Environment
 
 3D reconstruction of an indoor environment from frames extracted from a phone video: frames -> features ->
-two-view geometry -> COLMAP SfM -> metric scale -> cleanup -> planes and floor plan -> dense MVS (and optional
+two-view geometry -> SfM -> metric scale -> cleanup -> planes and floor plan -> dense MVS (and optional
 Gaussian Splatting) -> Poisson mesh -> hole closing -> exports (COLMAP, MeshLab, web) -> evaluation -> videos ->
 report. One YAML drives the whole run.
 
-## Setup
+Two flows share the same code, chosen by the top-level key `flow` of the config (`src/flows.py`):
+
+| | `flow: cpu` (default) | `flow: gpu` (alternative) |
+|---|---|---|
+| SfM | COLMAP SIFT + incremental mapper, Ceres BA on the CPU | COLMAP SIFT + GLOMAP `global_mapper`, global positioning + BA on the GPU (`t2/colmap-cudss:4.2.0` container) |
+| ablations | yes: Stage 5 builds `ablation.csv` from `evaluation.ablation_runs` | no: not run and not required (`ablation_runs` is ignored) |
+| environment | `.venv` (`pyproject.toml`) | `.venv-gpu` (`requirements*.txt`, torch cu128) + Docker with the NVIDIA container toolkit |
+| example configs | `config.yaml`, `configs/default.yaml`, `configs/kitchen_my_home_cpu.yaml`, `configs/experiments/*.yaml` | `config_gpu.yaml`, `config_gpu_keep.yaml`, `configs/kitchen_my_home_gpu.yaml` |
+
+Detection, matching, two-view geometry, densification, mesh, scale and the evaluation metrics are the same in
+both flows. Keys written in the YAML always win over the flow preset (the preset only fills missing `sfm` keys).
+
+## Choosing the flow
+
+```yaml
+# config.yaml (read by `python3 main.py` without arguments)
+flow: cpu        # cpu (default, also when the key is missing or null) | gpu
+```
+
+`flow: cpu` fills `sfm.technique: colmap`, `sfm.mapper: incremental`, `sfm.container: null`.
+`flow: gpu` fills `sfm.technique: glomap`, `sfm.mapper: global`, `sfm.container: t2/colmap-cudss:4.2.0`,
+`sfm.container_steps: [mapper]`, `sfm.container_ba_use_gpu: true`.
+
+## Install: CPU flow (default)
 
 Requirements:
 
 | | Linux | macOS |
 |---|---|---|
 | OS | glibc >= 2.35 (Ubuntu 22.04+), x86_64 or aarch64 | 13+ on Apple silicon (arm64), 14+ on Intel |
-| Python | 3.10 to 3.12 | 3.10 to 3.12 (Intel: open3d 0.19, the last release with Intel wheels) |
-| COLMAP >= 4.0 | with CUDA: conda-forge (`micromamba create -n colmap -c conda-forge colmap`) or built from source | `brew install colmap` (CPU only) |
-| pycolmap 4.x (optional) | only without the `colmap` CLI: `uv sync --extra cuda` (NVIDIA, x86_64) or `--extra cpu` | `uv sync --extra cpu` (arm64, macOS 14+) |
-| OpenMVS (optional) | build from source (https://github.com/cdcseacave/openMVS/wiki/Building) | same; there is no brew or conda package |
-| NVIDIA GPU + driver | optional: GPU SIFT/matching and patch-match stereo | not available |
-| 3D Gaussian Splatting (optional) | Inria repo in its own uv venv, CUDA 12.8 (see [Gaussian Splatting](#gaussian-splatting-optional)) | not available (CUDA only) |
+| Python | 3.10 to 3.12 (installed by uv) | 3.10 to 3.12 (Intel: open3d 0.19, the last release with Intel wheels) |
+| COLMAP >= 4.0 | built from source (https://colmap.github.io/install.html), with CUDA when there is an NVIDIA GPU | `brew install colmap` (CPU only) |
+| pycolmap 4.x (optional) | only without the `colmap` CLI: extra `cuda` (NVIDIA, x86_64) or `cpu` | extra `cpu` (arm64, macOS 14+) |
+| OpenMVS (optional) | build from source (https://github.com/cdcseacave/openMVS/wiki/Building) | same |
 
-Create a local Python 3.12 environment and install the dependencies with uv:
+Python environment with uv (`.venv`):
 
 ```bash
 uv python install 3.12
 uv venv --python 3.12 .venv
 source .venv/bin/activate
 uv pip install -r pyproject.toml
+uv pip install -r pyproject.toml --extra cpu    # optional: pycolmap, only when there is no `colmap` CLI
+                                                # (NVIDIA + Linux x86_64: --extra cuda instead; never both)
 ```
 
-Equivalent alternatives: `uv sync` (creates `.venv` from the pinned `uv.lock`), or `uv pip install -e .`
-inside the activated `.venv`. The platform-specific pins (open3d 0.19 vs 0.20, pymeshlab wheels) are markers
-in `pyproject.toml`, so the same commands work on Linux and macOS. Activate `.venv` before running anything:
-`main.py`, `view.py` and `run.sh` call the `python3` on `PATH`.
+The platform-specific pins (open3d 0.19 vs 0.20, pymeshlab wheels) are markers in `pyproject.toml`, so the
+same commands work on Linux and macOS. `uv sync` (from the pinned `uv.lock`) gives the same `.venv`.
 
 COLMAP must be on `PATH` (or set `sfm.colmap_bin`). Missing or older than 4.0 -> the SfM stage falls back to
 pycolmap when it is installed (`sfm.backend: auto`; same outputs and CSV columns, column `backend` says which
-ran), else WARNING and the stage is skipped. pycolmap is optional and not in the base install. Pick ONE extra,
-they are mutually exclusive (both provide the `pycolmap` module): `uv sync --extra cuda` (pycolmap-cuda12,
-Linux x86_64 + NVIDIA) or `uv sync --extra cpu` (pycolmap: Linux x86_64, macOS arm64 14+, Windows); with
-`uv pip install -r pyproject.toml` add `--extra cuda` or `--extra cpu`; with pip install only one of
-`"pycolmap-cuda12>=4.2,<5"` or `"pycolmap>=4.2,<5"` (`pip uninstall pycolmap` first when switching to cuda).
+ran), else WARNING and the stage is skipped. The `cpu` and `cuda` extras are mutually exclusive (both provide
+the `pycolmap` module): `uv pip uninstall pycolmap` before switching to `cuda`.
 OpenMVS is looked up on `PATH` (or `dense.openmvs.bin_dir`); missing -> WARNING, `openmvs` skipped.
 
-### Gaussian Splatting (optional)
+Check: `.venv/bin/python -m src.flows` prints `flows self-test OK`; `colmap -h` prints the version.
 
-`gaussian_splatting.enabled: true` runs the Inria 3DGS code (https://github.com/graphdeco-inria/gaussian-splatting)
-as subprocesses with its OWN interpreter (`gaussian_splatting.python`), so torch and its CUDA extensions never
-enter this repo's `.venv`. Missing interpreter, repo or NVIDIA GPU -> WARNING, stage skipped. Install recipe
-(uv venv at `~/gaussian-splatting/.venv`, torch for CUDA 12.8; the submodules are compiled with
-`TORCH_CUDA_ARCH_LIST=12.0` and `CUDA_HOME` pointing to a CUDA 12.8 toolkit, because the system nvcc 12.0 cannot
-target the RTX 5080, sm_120):
+## Install: GPU flow (alternative, `flow: gpu`)
+
+Tested on Linux x86_64, Python 3.12, RTX 5080 (sm_120), driver 580. The GPU environment `.venv-gpu` is separate
+from `.venv` and holds the whole pipeline plus torch (CUDA 12.8 wheels), so one interpreter runs `main.py` end to
+end. Needs an NVIDIA driver, Docker with the NVIDIA container toolkit and, only for the compiled extensions, a
+CUDA toolkit >= 12.8 (the system nvcc 12.0 cannot target sm_120).
 
 ```bash
-# CUDA 12.8 toolkit without sudo (only nvcc + headers; Python stays in uv)
-~/.local/bin/micromamba create -y -n gs -c conda-forge cuda-version=12.8 cuda-nvcc cuda-cudart-dev cuda-cccl
+# 1. venv + pipeline + torch cu128 + pycolmap-cuda12 + runtime deps of the GPU techniques
+uv venv .venv-gpu --python 3.12
+uv pip install --python .venv-gpu/bin/python -r requirements.txt
 
-git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting ~/gaussian-splatting
-cd ~/gaussian-splatting
-# gcc 13 needs it: add `#include <cstdint>` after `#include <vector>` in
-# submodules/diff-gaussian-rasterization/cuda_rasterizer/rasterizer_impl.h
-uv venv --python 3.11 .venv
-uv pip install --python .venv/bin/python torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
-uv pip install --python .venv/bin/python plyfile tqdm opencv-python-headless joblib pillow numpy setuptools wheel ninja
-export TORCH_CUDA_ARCH_LIST="12.0" CUDA_HOME=$HOME/micromamba/envs/gs PATH=$HOME/micromamba/envs/gs/bin:$PATH MAX_JOBS=8
-for s in simple-knn fused-ssim diff-gaussian-rasterization; do
-  uv pip install --python .venv/bin/python --no-build-isolation ./submodules/$s
-done
+# 2. InstantSfM, VGGT, VGGT-Omega, MapAnything without their pins (numpy 1.26 / numpy<2 / opencv 4.10)
+uv pip install --python .venv-gpu/bin/python --no-deps -r requirements-nodeps.txt
+
+# 3. bae (InstantSfM's sparse solver), compiled for sm_120; CUDA_HOME = a CUDA toolkit >= 12.8
+export CUDA_HOME=/usr/local/cuda-12.8 PATH=/usr/local/cuda-12.8/bin:$PATH
+TORCH_CUDA_ARCH_LIST=12.0 USE_CUDSS=0 MAX_JOBS=8 \
+  uv pip install --python .venv-gpu/bin/python --no-build-isolation --no-deps -r requirements-build.txt
+
+# 4. COLMAP 4.2.0 + Ceres 2.3 with CUDA + cuDSS (GPU global positioning and BA of flow: gpu), once (~1 h)
+docker build -t t2/colmap-cudss:4.2.0 docker/colmap-cudss
 ```
 
-The first `metrics.py` run downloads the LPIPS VGG weights (~530 MB) to `~/.cache/torch/hub/checkpoints/`.
-Smoke test (194 frames, 2000 iterations, RTX 5080): train 117 s, ~3.5 GB VRAM peak with `data_device: cpu`.
+Steps 3 and later are needed only by the techniques that use them: bae by `sfm.technique: instantsfm`, the
+container by `flow: gpu` (GLOMAP). Optional extras (MASt3R-SfM, OpenMVS container, Gaussian Splatting) are in
+[GPU SfM techniques](#gpu-sfm-techniques) and [Gaussian Splatting](#gaussian-splatting-optional).
 
-Check: `~/gaussian-splatting/.venv/bin/python -c "import torch, diff_gaussian_rasterization, simple_knn;
-print(torch.cuda.is_available())"` prints `True`.
-
-What changes on macOS (no CUDA):
-
-- SfM runs on the CPU (`sfm.use_gpu: auto` resolves to false). Slower, same results.
-- COLMAP patch-match stereo needs CUDA, so the `patch_match` dense method is skipped with a WARNING; without
-  OpenMVS there is no dense cloud, and Poisson/close_holes/mesh fall back to the sparse cloud
-  (`poisson.source: dense` -> sparse with a WARNING). Set `dense.enabled: false` to skip the attempt.
-- Recording the viewer orbit (`viewer.enabled`) needs a GUI session (logged-in desktop). Over SSH the
-  recording fails in its child process, the video is skipped with a WARNING and the run continues.
-  `python3 view.py` also needs the desktop.
+Check: `.venv-gpu/bin/python -c "import torch; print(torch.cuda.is_available())"` prints `True`, and
+`.venv-gpu/bin/python -m src.sfm.gpu` prints `OK`.
 
 ## Run
 
+CPU flow (default):
+
 ```bash
-python3 main.py <config>.yaml          # whole pipeline; no argument = configs/default.yaml
-python3 main.py --config <path>.yaml   # same thing
-./run.sh <config>.yaml                 # POSIX one-liner that forwards to main.py
+source .venv/bin/activate
+python3 main.py                        # config.yaml (flow: cpu)
+python3 main.py <config>.yaml          # any other config; same as --config <path>.yaml
 python3 view.py <config>.yaml          # interactive Open3D viewer of a finished run of that config
+```
+
+CPU ablations: each variant is one full run, then `kitchen_ablation.yaml` (`evaluation.ablation_runs`) reads
+their CSVs and writes `ablation.csv`. Stop at the first failure:
+
+```bash
+for c in kitchen_abl_seq_loop kitchen_abl_seq_noloop kitchen_abl_exhaustive kitchen_abl_frames_200 \
+         kitchen_abl_frames_100 kitchen_ablation; do
+  python3 main.py $c.yaml || break
+done
+```
+
+GPU flow (alternative): set `flow: gpu` in the config (or use a config that already has it) and run with
+`.venv-gpu`:
+
+```bash
+.venv-gpu/bin/python main.py config_gpu.yaml    # kitchen, GLOMAP + cuDSS container, every densifier
+.venv-gpu/bin/python main.py config.yaml        # after changing flow: cpu -> gpu in config.yaml
 ```
 
 The config is a path or a bare name, looked up in the current directory, then in the repo root, `configs/`
@@ -131,10 +160,27 @@ and `configs/experiments/` (`.yaml` may be omitted). So `python3 main.py default
 17. **mesh** (`src/mesh/mesh.py`): the chosen mesh in PLY/OBJ/STL/OFF/GLB plus a scene with cameras and path.
 18. **export** (`src/export/meshlab.py`): MeshLab project with every cloud and mesh as layers, filter script.
 19. **evaluation** (`src/evaluation`): reprojection error, metric error against tape measures, loop drift,
-    smooth vs textured walls, ablation table across runs.
+    smooth vs textured walls; ablation table across runs only in `flow: cpu` (`src/evaluation/__init__.py`
+    orchestrates Stage 5 there; `flow: gpu` runs the same metrics stage by stage, without ablation).
 20. **viewer** (`src/viewer.py`): orbit video of the chosen cloud, recorded in a child process.
 21. **videos** (`src/videos.py`): top-view trajectory, kept vs discarded frames, `videos.csv`.
 22. **report** (`src/relatorio.py`): `report.md` built only from the saved files.
+
+### Stage 5: evaluation
+
+When evaluation is enabled, Stage 5 writes numerical arrays under
+`results/<id>/evaluation/` and the following tables when their inputs are available:
+`artifacts/<id>/evaluation.csv`, `metric_error.csv`, `loop_drift.csv` and `ablation.csv`.
+The last pipeline stage always consolidates the available tables and figure paths in
+`artifacts/<id>/report.md`.
+
+| Key | Meaning |
+|---|---|
+| `report` | `max_figures` and `max_rows` for the generated `artifacts/<id>/report.md` |
+| `evaluation.enabled` | run Stage 5 before the report; uses global SfM when present and otherwise evaluates the current two-view clouds |
+| `evaluation.measured_cm` | measured `room_width`, `room_length` and `ceiling_height` values used by metric error |
+| `evaluation.loop_closed` | whether the capture really returned to its starting point |
+| `evaluation.ablation_runs` | run ids whose evaluation CSVs are compared in `ablation.csv` (`flow: cpu` only) |
 
 ## Adding a new video
 
@@ -247,7 +293,7 @@ the effect (compare its reprojection and dense metrics with `default` in the abl
 | Open3D cleanup | Open3D CUDA build | `cleanup.device: auto\|CPU:0\|CUDA:0` |
 | viewer orbit rendering | OpenGL / EGL | `viewer.offscreen` |
 | Gaussian Splatting train/render/metrics | always CUDA (else skipped) | `gaussian_splatting.gpu_index`, `gaussian_splatting.data_device` |
-| SfM with InstantSfM, MASt3R-SfM or VGGT | always CUDA, `.venv-gpu` (see [README-GPU.md](README-GPU.md)) | `sfm.technique`, `sfm.instantsfm`, `sfm.mast3r_sfm`, `sfm.vggt` |
+| SfM with InstantSfM, MASt3R-SfM or VGGT | always CUDA, `.venv-gpu` (see [GPU SfM techniques](#gpu-sfm-techniques)) | `sfm.technique`, `sfm.instantsfm`, `sfm.mast3r_sfm`, `sfm.vggt` |
 
 Poisson (`poisson.threads`), Close Holes and OpenMVS (`dense.openmvs.max_threads`) run on the CPU.
 
@@ -257,6 +303,7 @@ Generated from `src/constants.py` and the comments of `configs/default.yaml`; bl
 
 | key | default | meaning |
 |---|---|---|
+| `flow` | `cpu` | cpu (COLMAP incremental, ablations) \| gpu (GLOMAP + cuDSS container, no ablations); src/flows.py |
 | **`run`** | | id and output folders of this experiment |
 | `run.id` | `null` | null = uses THIS FILE'S NAME; outputs go to `<ws>/results/<id>/` |
 | `run.output_root` | `null` | null = `<ws>/results` |
@@ -510,6 +557,211 @@ Generated from `src/constants.py` and the comments of `configs/default.yaml`; bl
 | `evaluation.texture_split_quantile` | `0.5` | texture quantile splitting smooth_wall / textured_wall |
 | `evaluation.inlier_px` | `2.0` | point is inlier if its mean reprojection error < inlier_px |
 
+## GPU SfM techniques
+
+`sfm.technique` picks how the sparse model is built. Every technique writes the same COLMAP workspace,
+`<run_dir>/exports/colmap/{images/, database.db, sparse/0, sparse.ply, project.ini, colmap.log}`, so densification,
+mesh, export and evaluation run unchanged.
+
+| `sfm.technique` | module | what runs | interpreter |
+|---|---|---|---|
+| `colmap` (default) | `src/sfm/colmap.py` | COLMAP incremental mapper (CLI, or pycolmap) | `.venv` or `.venv-gpu` |
+| `glomap` | `src/sfm/colmap.py` | COLMAP 4 `global_mapper` (GLOMAP), same as `sfm.mapper: global` | `.venv` or `.venv-gpu` |
+| `instantsfm` | `src/sfm/instantsfm.py` | pycolmap SIFT + matching, InstantSfM global mapper in PyTorch | `.venv-gpu` |
+| `mast3r_sfm` | `src/sfm/mast3r_sfm.py` | MASt3R pairs (retrieval) + sparse global alignment | `.venv-gpu` |
+| `vggt` | `src/sfm/vggt.py` | VGGT feed-forward cameras (one pass) | `.venv-gpu` |
+
+```yaml
+sfm:
+  technique: vggt            # colmap | glomap | instantsfm | mast3r_sfm | vggt
+  ba_global_frames_ratio: 1.3  # colmap incremental only: fewer global BAs (null = COLMAP 1.1)
+```
+
+### How each technique ends in COLMAP format
+
+- `instantsfm`: SIFT and matches go into `database.db` through pycolmap (same options as the pycolmap backend:
+  `sfm.matcher`, `sfm.use_gpu`, `sfm.intrinsics: fixed` becomes the focal prior). InstantSfM solves rotation
+  averaging, global positioning and its GPU bundle adjustment; the cameras of its largest cluster are then written
+  into a pycolmap `Reconstruction` and the points are triangulated from the same database. Its own writer is not
+  used: it leaves points2D pointing at dropped tracks and pycolmap refuses the model.
+- `mast3r_sfm` and `vggt`: the network gives poses and intrinsics at 512 / 518 px; they are mapped back to the
+  original frame size (resize + crop of each loader), written into a `Reconstruction` built from the pycolmap
+  database (SIFT + matching on the used frames), and `pycolmap.triangulate_points` builds the tracks at full
+  resolution. `ba: true` adds a pycolmap bundle adjustment (poses, focal and principal point when
+  `refine_intrinsics: true`), then drops points over 4 px or under 1.5 deg.
+- `mast3r_sfm` and `vggt` use a uniform subsample of `max_frames` frames (`images/` holds only those), so the
+  dense stage sees fewer, wider-baseline views. `instantsfm` uses every frame by default.
+
+Each GPU technique runs in a spawned child process (as the pycolmap backend): a CUDA error or abort leaves
+`main.py` running, the VRAM is released at the end, and everything it prints goes to `colmap.log`. No shell
+command is run from the code. `sfm_metrics.csv` gets `technique`, `t_<step>_s`, `vram_peak_gb` (torch peak),
+`registered`, `points`, `mean_reproj_px`. A model is reused (`sfm.rerun: false`) only when
+`exports/colmap/technique.txt` names the same technique.
+
+### Licenses
+
+| technique | code | weights | commercial use |
+|---|---|---|---|
+| colmap / glomap | BSD | none | yes |
+| instantsfm | CC BY-NC 4.0 (cre185/InstantSfM) | none | no |
+| mast3r_sfm | CC BY-NC-SA 4.0 (naver/mast3r) | MASt3R checkpoint + retrieval: CC BY-NC-SA 4.0 (naver) | no |
+| vggt | VGGT License (facebookresearch/vggt, commercial allowed, no military use) | `facebook/VGGT-1B`: CC BY-NC 4.0 (default, official). `facebook/VGGT-1B-Commercial`: VGGT License, gated (Hugging Face approval + `hf auth login`) | only with the Commercial weights |
+
+Only the official weights published by the authors are used: `facebook/VGGT-1B` and
+`naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric` from the Hugging Face hub, and the MASt3R retrieval
+`.pth` + codebook from `https://download.europe.naverlabs.com/ComputerVision/MASt3R/`.
+
+### Extra installs (`.venv-gpu`)
+
+Base GPU install: [Install: GPU flow](#install-gpu-flow-alternative-flow-gpu). MASt3R-SfM also needs:
+
+```bash
+# 4. MASt3R: official clone (not a pip package), put on sys.path from sfm.mast3r_sfm.repo_dir
+git clone --recursive https://github.com/naver/mast3r ~/mast3r
+git -C ~/mast3r checkout f5209afc300cec36239a7ac992263f36847bbba0 && git -C ~/mast3r submodule update --init --recursive
+
+# 5. asmk (MASt3R retrieval): its committed hamming.c is Cython 0.29 and does not build on Python 3.12
+git clone https://github.com/jenicek/asmk ~/asmk && git -C ~/asmk checkout 2a96d9c03a841dffdfddabc699a20512dcd09363
+.venv-gpu/bin/cython -3 ~/asmk/cython/hamming.pyx -o ~/asmk/cython/hamming.c
+uv pip install --python .venv-gpu/bin/python --no-build-isolation ~/asmk
+```
+
+Without asmk set `sfm.mast3r_sfm.scene_graph: swin` (sliding window pairs instead of retrieval).
+`scikit-sparse` (an InstantSfM dependency that needs the SuiteSparse headers) is not installed:
+`src/sfm/instantsfm.py` registers a scipy `splu` shim for the single call InstantSfM makes.
+
+Weights download on the first run (or ahead of time, ~7.5 GB in total):
+
+```bash
+.venv-gpu/bin/python -c "
+from huggingface_hub import snapshot_download
+snapshot_download('facebook/VGGT-1B', allow_patterns=['config.json', 'model.safetensors'])
+snapshot_download('naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric')
+from src.sfm import mast3r_sfm; mast3r_sfm.download_retrieval(mast3r_sfm.DEFAULTS)"
+```
+
+Check: every module has a self-test, `.venv-gpu/bin/python -m src.sfm.vggt` (and `gpu`, `mast3r_sfm`,
+`instantsfm`, `colmap`, `pycolmap_backend`) prints `OK`.
+
+### Run
+
+```bash
+# one YAML per technique, all equal to parede_sala.yaml except sfm.technique; outputs in parede_sala_GPU/
+for t in vggt mast3r_sfm instantsfm glomap; do .venv-gpu/bin/python main.py parede_sala_GPU_$t.yaml || break; done
+```
+
+### Key reference
+
+| key | default | meaning |
+|---|---|---|
+| `sfm.technique` | `colmap` | `colmap` \| `glomap` \| `instantsfm` \| `mast3r_sfm` \| `vggt` |
+| `sfm.ba_global_frames_ratio` | `null` | incremental mapper: global BA when the model grew by this ratio (COLMAP 1.1); 1.3 = fewer global BAs |
+| `sfm.instantsfm.max_frames` | `null` | uniform subsample; null = every frame |
+| `sfm.instantsfm.num_iteration_bundle_adjustment` / `ba_max_num_iterations` | 3 / 100 | its GPU BA rounds and iterations per round |
+| `sfm.instantsfm.skip_view_graph_calibration` / `skip_retriangulation` / `skip_pruning` | false / true / true | InstantSfM stages |
+| `sfm.instantsfm.ba` | false | extra pycolmap BA after the retriangulation |
+| `sfm.mast3r_sfm.repo_dir` | `~/mast3r` | recursive clone of naver/mast3r |
+| `sfm.mast3r_sfm.max_frames` | 200 | uniform subsample; pairs, time and VRAM grow with it |
+| `sfm.mast3r_sfm.scene_graph` | `retrieval` | `retrieval` (retrieval-`retrieval_na`-`retrieval_k`) \| `swin` (`window`) |
+| `sfm.mast3r_sfm.optim_level` | `refine+depth` | `coarse` (no 2D refinement) \| `refine` \| `refine+depth` |
+| `sfm.mast3r_sfm.lr1/niter1/lr2/niter2` | 0.07/300/0.01/300 | sparse global alignment schedule (demo values) |
+| `sfm.mast3r_sfm.ba` / `refine_intrinsics` | true / true | pycolmap BA on the triangulated SIFT tracks |
+| `sfm.vggt.weights` | `facebook/VGGT-1B` | official weights (or the gated `facebook/VGGT-1B-Commercial`) |
+| `sfm.vggt.max_frames` | 80 | one forward pass: 80 frames ~9.9 GB peak on the RTX 5080, 150 runs out of 16 GB |
+| `sfm.vggt.image_size` | 518 | long side; the short side keeps the aspect (multiple of 14), no crop or pad |
+| `sfm.vggt.dtype` | `auto` | bf16 on sm_80+ |
+| `sfm.vggt.ba` / `refine_intrinsics` | true / true | pycolmap BA on the triangulated SIFT tracks |
+
+### Smoke tests (20 frames of parede_sala, every 8th of the first 160, RTX 5080)
+
+| technique | time (s) | VRAM peak (GB) | registered | points | mean reproj (px) | next stages open it |
+|---|---|---|---|---|---|---|
+| colmap (incremental) | 12.5 | n/a (COLMAP CLI) | 20/20 | 10 615 | 0.71 | yes |
+| colmap, `ba_global_frames_ratio: 1.3` | 10.7 | n/a (COLMAP CLI) | 20/20 | 10 632 | 0.71 | yes |
+| glomap | 10.8 | n/a (COLMAP CLI) | 20/20 | 10 764 | 0.68 | yes |
+| instantsfm | 20.2 | 0.86 | 20/20 | 15 180 | 1.15 | yes |
+| mast3r_sfm | 71.1 | 3.58 | 20/20 | 11 489 | 0.69 | yes |
+| vggt | 22.2 (forward 1.0) | 6.88 | 20/20 | 15 906 | 0.56 | yes |
+| vggt, 80 frames of the whole video | 33.0 (forward 6.2) | 9.86 | 80/80 | 16 425 | 0.55 | yes |
+
+"Next stages open it" = `sfm_convert` reads `sparse/0` (TXT) and writes the numpy arrays. Times include model
+loading (VGGT 5 GB, MASt3R 2.7 GB). On 20 frames the speed gap does not show; it grows with the frame count
+(the incremental mapper is superlinear).
+
+### The two T2 flows (`flow: cpu | gpu`)
+
+The top-level key `flow` (src/flows.py) picks the SfM path; densification, mesh, scale and the evaluation metrics
+are shared, the ablations belong to `flow: cpu`.
+Keys written in the YAML win over the preset.
+
+| | `flow: cpu` | `flow: gpu` |
+|---|---|---|
+| config | `configs/kitchen_my_home_cpu.yaml` | `config_gpu.yaml` (= `configs/kitchen_my_home_gpu.yaml`, same run id) |
+| run | `python3 main.py kitchen_my_home_cpu.yaml` (`.venv`) | `.venv-gpu/bin/python main.py config_gpu.yaml` |
+| SfM | COLMAP SIFT (GPU) + incremental mapper, Ceres BA on the CPU | COLMAP SIFT (GPU) + GLOMAP `global_mapper`, global positioning + BA on the GPU in the `t2/colmap-cudss:4.2.0` container |
+| SIFT | twice: OpenCV SIFT in the 2D comparison (detection/matching/epipolar, with ORB and AKAZE) and COLMAP SIFT for SfM | same |
+| dense | `patch_match` only (light) | all `dense.methods` (patch_match, openmvs, plane_sweep, sgm, casmvsnet, mvsnet, patchmatchnet, vggt_omega, mapanything) |
+| ablation | `configs/experiments/kitchen_abl_*.yaml` (exhaustive, sequential with/without loop, 100/200 frames) + `kitchen_ablation.yaml` | - (not run, not required) |
+| Gaussian Splatting | off | on |
+
+What stays on the CPU in both flows (CPU-only algorithms in COLMAP/Open3D): rotation averaging, track building and
+retriangulation of GLOMAP, `stereo_fusion`, Poisson, `close_holes`, `liepa`, `room_fill`, evaluation. Open3D
+cleanup uses `cleanup.device: CPU:0` on purpose (all cleanups take ~4 s; the VRAM is kept for Gaussian Splatting).
+
+### GPU bundle adjustment in COLMAP itself (Ceres 2.3 + cuDSS): `docker/colmap-cudss`
+
+A COLMAP build without cuDSS in its Ceres (e.g. the prebuilt packages), so `GlobalMapper.gp_use_gpu` / `ba_ceres_use_gpu` fall back to the
+CPU. `docker/colmap-cudss/Dockerfile` builds COLMAP 4.2.0 against Ceres 2.3 with CUDA + cuDSS for sm_120:
+
+```bash
+docker build -t t2/colmap-cudss:4.2.0 docker/colmap-cudss   # once (~1 h); needs the NVIDIA container toolkit
+```
+
+`flow: gpu` sets `sfm.container: t2/colmap-cudss:4.2.0`, `container_steps: [mapper]` and
+`container_ba_use_gpu: true` (src/sfm/container.py runs the step with `--gpus all`, the workspace bind-mounted).
+Check in the run log: `colmap_info docker:t2/colmap-cudss:4.2.0: version 4.2, CUDA build True, GPU visible True`,
+and no "falling back to CPU" in `exports/colmap/colmap.log`. Kitchen (270 frames): global positioning 10.4 s,
+iterative BA 4.3 s.
+
+## Gaussian Splatting (optional)
+
+`gaussian_splatting.enabled: true` runs the Inria 3DGS code (https://github.com/graphdeco-inria/gaussian-splatting)
+as subprocesses with its OWN interpreter (`gaussian_splatting.python`), so torch and its CUDA extensions never
+enter this repo's `.venv`. Missing interpreter, repo or NVIDIA GPU -> WARNING, stage skipped. Install recipe
+(uv venv at `~/gaussian-splatting/.venv`, torch for CUDA 12.8; the submodules are compiled with
+`TORCH_CUDA_ARCH_LIST=12.0` and `CUDA_HOME` pointing to a CUDA 12.8 toolkit, because the system nvcc 12.0 cannot
+target the RTX 5080, sm_120):
+
+```bash
+git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting ~/gaussian-splatting
+cd ~/gaussian-splatting
+# gcc 13 needs it: add `#include <cstdint>` after `#include <vector>` in
+# submodules/diff-gaussian-rasterization/cuda_rasterizer/rasterizer_impl.h
+uv venv --python 3.11 .venv
+uv pip install --python .venv/bin/python torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
+uv pip install --python .venv/bin/python plyfile tqdm opencv-python-headless joblib pillow numpy setuptools wheel ninja
+export TORCH_CUDA_ARCH_LIST="12.0" CUDA_HOME=/usr/local/cuda-12.8 PATH=/usr/local/cuda-12.8/bin:$PATH MAX_JOBS=8
+for s in simple-knn fused-ssim diff-gaussian-rasterization; do
+  uv pip install --python .venv/bin/python --no-build-isolation ./submodules/$s
+done
+```
+
+The first `metrics.py` run downloads the LPIPS VGG weights (~530 MB) to `~/.cache/torch/hub/checkpoints/`.
+Smoke test (194 frames, 2000 iterations, RTX 5080): train 117 s, ~3.5 GB VRAM peak with `data_device: cpu`.
+
+Check: `~/gaussian-splatting/.venv/bin/python -c "import torch, diff_gaussian_rasterization, simple_knn;
+print(torch.cuda.is_available())"` prints `True`.
+
+What changes on macOS (no CUDA):
+
+- SfM runs on the CPU (`sfm.use_gpu: auto` resolves to false). Slower, same results.
+- COLMAP patch-match stereo needs CUDA, so the `patch_match` dense method is skipped with a WARNING; without
+  OpenMVS there is no dense cloud, and Poisson/close_holes/mesh fall back to the sparse cloud
+  (`poisson.source: dense` -> sparse with a WARNING). Set `dense.enabled: false` to skip the attempt.
+- Recording the viewer orbit (`viewer.enabled`) needs a GUI session (logged-in desktop). Over SSH the
+  recording fails in its child process, the video is skipped with a WARNING and the run continues.
+  `python3 view.py` also needs the desktop.
+
 ## History: first milestone (2D feature study)
 
 Stage list and layout of the first milestone, kept as written. Stages 3 to 6 still run as described;
@@ -522,6 +774,9 @@ pose, triangulation and evaluation have since been implemented (see Pipeline).
 5. **geometry** (`src/epipolar`): fundamental/essential matrices and RANSAC inlier masks.
 6. **report** (`src/relatorio.py`) and matching metrics/figures: artifacts built only from saved `.npy` files.
 7. **pose**, **triangulation** and **evaluation**: pending stages.
+
+Stage 3 part 2 (`config.yaml` partial at the time): stages, in order: extraction, frame_quality, detection,
+matching, geometry, two_view, optional evaluation, report.
 
 ```
 src/

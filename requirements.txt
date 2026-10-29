@@ -1,11 +1,11 @@
-# GPU environment (.venv-gpu) for sfm.technique: instantsfm | mast3r_sfm | vggt (README-GPU.md).
+# GPU environment (.venv-gpu) for sfm.technique: instantsfm | mast3r_sfm | vggt (README.md, GPU SfM techniques).
 # uv style, no conda. Tested: Linux x86_64, Python 3.12, RTX 5080 (sm_120), driver 580, CUDA 12.8 wheels.
 #   uv venv .venv-gpu --python 3.12
 #   uv pip install --python .venv-gpu/bin/python -r requirements.txt
 #   uv pip install --python .venv-gpu/bin/python --no-deps -r requirements-nodeps.txt
 #   CUDA_HOME=<CUDA toolkit >= 12.8> TORCH_CUDA_ARCH_LIST=12.0 USE_CUDSS=0 \
 #     uv pip install --python .venv-gpu/bin/python --no-build-isolation --no-deps -r requirements-build.txt
-#   + asmk (MASt3R retrieval) and the MASt3R clone: README-GPU.md
+#   + asmk (MASt3R retrieval) and the MASt3R clone: README.md, GPU SfM techniques
 # The CPU pipeline keeps using `uv sync` (pyproject.toml / uv.lock, .venv); this file repeats its dependencies
 # so one interpreter runs main.py end to end with the GPU techniques.
 

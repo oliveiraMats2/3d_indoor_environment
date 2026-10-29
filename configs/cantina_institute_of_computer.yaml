@@ -9,7 +9,7 @@
 # 'dataset of this copy' differ. No inheritance: this file reads on its own.
 # =============================================================================
 # Single default experiment: one YAML = one experiment. Every key is validated by
-# main.py and unknown keys are rejected. Run: python3 main.py default.yaml (or ./run.sh default.yaml)
+# main.py and unknown keys are rejected. Run: python3 main.py default.yaml
 
 # Layout (<ws> = extraction.video without extension): <ws>/frames/<tag>/, <ws>/results/<id>/, <ws>/artifacts/<id>/
 

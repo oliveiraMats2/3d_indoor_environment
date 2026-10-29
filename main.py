@@ -24,7 +24,7 @@ import cv2
 import numpy as np
 import yaml
 
-from src import detectores, epipolar, extrair_quadros, frame_quality, matching, relatorio
+from src import detectores, epipolar, evaluation, extrair_quadros, frame_quality, matching, relatorio
 from src.constants import Config
 from src.matching import metrics as matching_metrics
 from src.matching import visualize as matching_visualize
@@ -33,7 +33,7 @@ from src.cloud import clean, floorplan, planes
 from src.dense import compare as dense_compare, openmvs, patch_match
 from src.dense import casmvsnet, mapanything, mvsnet, patchmatchnet, plane_sweep, sgm, vggt_omega
 from src.epipolar import two_view
-from src.evaluation import ablation, detector_choice, hard_regions, lidar, loop_drift, metric_error, photo_vs_render, reprojection
+from src.evaluation import detector_choice, hard_regions, lidar, loop_drift, metric_error, photo_vs_render, reprojection
 from src.export import meshlab
 from src.gs import gaussian_splatting
 from src.mesh import close_holes, liepa, mesh, poisson, room_fill
@@ -219,7 +219,11 @@ def main():
     if cfg.photo_vs_render.enabled:  # T2 4.B.3: real photo | mesh render | GS render at the same pose
         stage("photo_vs_render", photo_vs_render.run, full_cfg, run_dir, artifacts_dir)
 
-    if cfg.evaluation.enabled:
+    if cfg.flow != "gpu":  # CPU flow (default, also flow: null): Stage 5 orchestration, ablations included (evaluation.ablation_runs)
+        stage("evaluation", evaluation.run, full_cfg, run_dir, artifacts_dir)
+        if cfg.evaluation.enabled and cfg.evaluation.hard_regions:  # reads reproj_errors.npy written above
+            stage("hard_regions", hard_regions.run, full_cfg, run_dir, artifacts_dir)
+    elif cfg.evaluation.enabled:  # GPU flow: same metrics, ablations neither run nor required
         stage("reprojection", reprojection.run, full_cfg, run_dir, artifacts_dir)
         stage("metric_error", metric_error.run, full_cfg, run_dir, artifacts_dir)
         stage("loop_drift", loop_drift.run, full_cfg, run_dir, artifacts_dir)
@@ -227,7 +231,7 @@ def main():
             stage("hard_regions", hard_regions.run, full_cfg, run_dir, artifacts_dir)
 
         if cfg.evaluation.ablation_runs:
-            stage("ablation", ablation.run, full_cfg, run_dir, artifacts_dir)
+            log.info("flow gpu: evaluation.ablation_runs ignored (ablations belong to the CPU flow)")
 
     if cfg.lidar.path:  # real LiDAR map = ground truth: alignment, accuracy/completeness, LiDAR mesh
         stage("lidar", lidar.run, full_cfg, run_dir, artifacts_dir)

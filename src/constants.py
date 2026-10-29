@@ -294,7 +294,7 @@ class Lidar(Strict):  # src/evaluation/lidar.py: real LiDAR map = ground truth
     min_fitness: float = 0.5
 
 class Config(Strict):
-    flow: Optional[Literal["cpu", "gpu"]] = None  # src/flows.py presets: cpu = COLMAP incremental, gpu = GLOMAP + cuDSS
+    flow: Optional[Literal["cpu", "gpu"]] = "cpu"  # null = cpu without preset; src/flows.py presets: cpu = COLMAP incremental + ablations, gpu = GLOMAP + cuDSS
     run: Run = Run(); extraction: Extraction = Extraction(); frame_quality: FrameQuality = FrameQuality()
     detection: Detection = Detection(); report: Report = Report(); filters: Filters = Filters()
     matching: Matching = Matching(); geometry: Geometry = Geometry(); visualize: Visualize = Visualize()
