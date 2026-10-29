@@ -105,7 +105,7 @@ matching:                     # src/matching
 geometry:                     # src/epipolar (F/E and RANSAC)
   enabled: true
   ransac:
-    method: USAC_MAGSAC       # less sensitive to the hard threshold than RANSAC
+    method: RANSAC            # dataset of this copy: USAC_MAGSAC hits an OpenCV 5 assertion (empty model) on akaze img_0115__img_0117
     threshold_px: 1.0
     confidence: 0.999
     max_iters: 5000
