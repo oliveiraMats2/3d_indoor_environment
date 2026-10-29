@@ -204,6 +204,9 @@ scale:                        # src/sfm/scale.py
   provisional_extent_cm: 500  # only used to turn *_cm thresholds into model units when unit=model
   outline:
     measurements: configs/measurements/kitchen_my_home.yaml  # flow of this copy: contorno_cm
+    wall_band: [0.7, 0.99]    # dataset of this copy: best fit of the band sweep (median 0.8 cm, p90 5 cm, inliers 95%)
+    min_support: 0.4          # dataset of this copy: the video covers ~46% of the outline (one side of the kitchen);
+                              # the fitted scale is stable across bands (0.061-0.063 units/cm), only the support is low
 
 cleanup:                      # src/cloud/clean.py (sparse and each dense method)
   enabled: true
