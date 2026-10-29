@@ -24,6 +24,7 @@
 #         project.ini, colmap.log}; artifacts_dir/sfm_metrics.csv (row key run_id, merged with the
 #         columns other sfm modules write): t_feature_s, t_match_s, t_mapper_s, t_total_s, matcher, mapper.
 # YAML  : sfm.{technique (colmap|glomap here; glomap forces mapper global), enabled, rerun, colmap_bin, camera_model, single_camera, intrinsics (estimate|fixed),
+#         camera_groups (one camera per frame-name group: frames merged from several videos),
 #         fixed_dist [k1,k2,p1,p2], matcher (sequential|exhaustive), sequential_overlap, loop_detection,
 #         vocab_tree, mapper (incremental|global), use_gpu, gpu_index, ba_use_gpu, max_image_size,
 #         max_num_features, min_num_matches, multiple_models, ba_global_max_num_iterations,
@@ -166,6 +167,16 @@ def _b(value) -> str:
 def list_frames(frames_dir: Path) -> list[Path]:
 
     return sorted({p for g in IMAGE_GLOBS for p in Path(frames_dir).glob(g)})
+
+def camera_groups(frames: list[Path]) -> dict[str, list[str]]:
+    """Frame names grouped by their name without digits (img_k0001.png, img_o0001.png -> img_k.png, img_o.png):
+    frames merged from several videos keep one camera per video."""
+
+    groups: dict[str, list[str]] = {}
+    for frame in frames:
+        groups.setdefault(re.sub(r"\d+", "", frame.name), []).append(frame.name)
+
+    return groups
 
 def link_images(frames: list[Path], images_dir: Path, mode: str = "auto") -> str:
     """images/ holds only the current frames, as hardlinks (auto: hardlink, copy when the file system
@@ -526,12 +537,23 @@ def run(cfg: dict, run_dir: str, artifacts_dir: str) -> Path | None:
              len(frames), scfg["matcher"], scfg["mapper"], "fixed" if cam_params else "estimate", scfg["use_gpu"])
 
     cmds = build_commands(scfg, ws, cam_params, int(cfg["run"]["seed"]))
+    steps = {step: [cmds[step]] for step in ("feature", "match", "mapper")}
+    groups = camera_groups(frames) if scfg.get("camera_groups") else {}
+    if len(groups) > 1:  # one feature_extractor per group: COLMAP gives each call its own camera (and rig)
+        steps["feature"] = []
+        for i, (key, names) in enumerate(sorted(groups.items())):
+            image_list = ws / f"image_list_{i}.txt"
+            image_list.write_text("\n".join(names) + "\n")
+            feature = list(cmds["feature"])
+            feature[feature.index("--ImageReader.single_camera") + 1] = "1"
+            steps["feature"].append(feature + ["--image_list_path", str(image_list.resolve())])
+            log.info("sfm: camera group %s: %d frames", key, len(names))
     log_path = ws / "colmap.log"
     t0 = time.perf_counter()
     times = {}
     for step in ("feature", "match", "mapper"):
         try:
-            times[f"t_{step}_s"] = round(_run(cmds[step], log_path, image_for(scfg, step)), 2)
+            times[f"t_{step}_s"] = round(sum(_run(cmd, log_path, image_for(scfg, step)) for cmd in steps[step]), 2)
         except subprocess.CalledProcessError as exc:
             log.warning("sfm: COLMAP %s failed with exit code %s (see %s): sfm stopped", cmds[step][1],
                         exc.returncode, log_path)
@@ -602,6 +624,8 @@ if __name__ == "__main__":
     assert flag(c["mapper"], "--Mapper.random_seed") == "7" and "--Mapper.ba_refine_focal_length" not in c["mapper"]
     assert flag(c["mapper"], "--Mapper.ba_use_gpu") == "0"
 
+    groups = camera_groups([Path(n) for n in ("img_k0001.png", "img_o0001.png", "img_k0002.png")])
+    assert groups == {"img_k.png": ["img_k0001.png", "img_k0002.png"], "img_o.png": ["img_o0001.png"]}
     # loop detection without vocab tree -> disabled; with vocab tree -> enabled
     c = build_commands({**DEFAULTS, "loop_detection": True}, ws, None, 0)
     assert flag(c["match"], "--SequentialMatching.loop_detection") == "0" and "--SequentialMatching.vocab_tree_path" not in c["match"]

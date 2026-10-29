@@ -116,6 +116,7 @@ class Sfm(Strict):
     technique: Literal["colmap", "glomap", "instantsfm", "mast3r_sfm", "vggt"] = "colmap"  # glomap = colmap with mapper global
     enabled: bool = True; rerun: bool = False; colmap_bin: str = "colmap"; camera_model: str = "OPENCV"
     single_camera: bool = True; intrinsics: Literal["estimate", "fixed"] = "estimate"
+    camera_groups: bool = False  # colmap/glomap: one camera per frame-name group (digits stripped: img_k*, img_o*) = frames merged from several videos
     fixed_dist: list[float] = [0.0, 0.0, 0.0, 0.0]; matcher: Literal["sequential", "exhaustive"] = "sequential"
     sequential_overlap: int = 10; loop_detection: bool = False; vocab_tree: Optional[str] = None
     mapper: Literal["incremental", "global"] = "incremental"; use_gpu: Union[bool, Literal["auto"]] = "auto"; gpu_index: str = "0"

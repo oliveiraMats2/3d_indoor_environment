@@ -51,4 +51,6 @@ results/
 
 # workspace of on_side_kitchen.mov (config_on_side_kitchen*.yaml)
 /on_side_kitchen/
+# workspace of kitchen_my_home.MOV + on_side_kitchen.mov merged (config_kitchen_on_side*.yaml)
+/kitchen_on_side/
 third_party/
