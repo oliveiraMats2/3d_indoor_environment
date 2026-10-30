@@ -54,3 +54,6 @@ results/
 # workspace of kitchen_my_home.MOV + on_side_kitchen.mov merged (config_kitchen_on_side*.yaml)
 /kitchen_on_side/
 third_party/
+# workspace of cozinha.MOV (config_cozinha.yaml) and of the LiDAR capture (config_cozinha_lidar.yaml)
+/cozinha/
+/cozinha_lidar/
