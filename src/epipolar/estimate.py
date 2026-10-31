@@ -151,23 +151,30 @@ def estimate(cfg: dict, first_points: np.ndarray, second_points: np.ndarray, int
     except AttributeError as exc:
         raise ValueError(f"OpenCV does not provide RANSAC method {ransac['method']!r}") from exc
 
-    fundamental_raw, fundamental_mask_raw = cv2.findFundamentalMat(
-        first,
-        second,
-        method,
-        ransac["threshold_px"],
-        ransac["confidence"],
-        ransac["max_iters"],
-    )
-    essential_raw, essential_mask_raw = cv2.findEssentialMat(
-        first,
-        second,
-        intrinsics,
-        method=method,
-        prob=ransac["confidence"],
-        threshold=ransac["threshold_px"],
-        maxIters=ransac["max_iters"],
-    )
+    try:
+        fundamental_raw, fundamental_mask_raw = cv2.findFundamentalMat(
+            first,
+            second,
+            method,
+            ransac["threshold_px"],
+            ransac["confidence"],
+            ransac["max_iters"],
+        )
+    except cv2.error:
+        fundamental_raw, fundamental_mask_raw = None, None
+
+    try:
+        essential_raw, essential_mask_raw = cv2.findEssentialMat(
+            first,
+            second,
+            intrinsics,
+            method=method,
+            prob=ransac["confidence"],
+            threshold=ransac["threshold_px"],
+            maxIters=ransac["max_iters"],
+        )
+    except cv2.error:
+        essential_raw, essential_mask_raw = None, None
 
     fundamental = _matrix_or_nan(fundamental_raw)
     essential = _matrix_or_nan(essential_raw)
