@@ -35,17 +35,21 @@ from src.mesh import liepa
 log = logging.getLogger(__name__)
 REG = o3d.pipelines.registration
 DT = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("rgba", "u1", 4)])
-FRAME_BYTES = 8734958
 OFF = 1 << 20  # 21 bits per axis
 
 
 def read(path: Path) -> np.ndarray | None:
     """xyz (float64) + rgb (0-1) of one frame as an (N, 6) array; None when truncated."""
 
-    if path.stat().st_size != FRAME_BYTES:
-        return None
     raw = path.read_bytes()
-    d = np.frombuffer(raw, DT, offset=raw.index(b"end_header\n") + 11)
+    try:
+        off = raw.index(b"end_header\n") + 11
+        n = int(raw[:off].split(b"element vertex ")[1].split(b"\n")[0])
+    except (ValueError, IndexError):
+        return None
+    if len(raw) != off + n * DT.itemsize:  # frames have different point counts; a short file is truncated
+        return None
+    d = np.frombuffer(raw, DT, offset=off)
     p = np.stack([d["x"], d["y"], d["z"]], 1).astype(np.float64)
     ok = np.isfinite(p).all(1) & (np.abs(p).sum(1) > 0)
     return np.hstack([p[ok], d["rgba"][ok, :3] / 255.0])
