@@ -1,0 +1,415 @@
+# Ablacao na cozinha (T8, R28), variante seq_com_laco_146: stride 160, sfm.matcher sequential, loop_detection True.
+# Gerado por tools/report/gera_configs_ablacao_cozinha.py; base config_cozinha.yaml.
+# Estagios ate SfM + escala + loop_drift + metric_error; saida: cozinha_ablacao/seq_com_laco_146/
+cleanup:
+  crop_percentiles:
+  - 0
+  - 100
+  device: CPU:0
+  enabled: true
+  nb_neighbors: 20
+  std_ratio: 100.0
+  voxel_cm: 1.0
+close_holes:
+  enabled: false
+  max_hole_size: 300
+  min_component_frac: 0.01
+  self_intersection: true
+  variants:
+  - pre
+  - raw
+dense:
+  enabled: false
+  fusion:
+    cache_size: 32
+    max_depth_error: 0.01
+    max_reproj_error: 2.0
+    min_num_pixels: 3
+  gpu_index: '0'
+  mapanything:
+    voxel: 0.04
+  max_image_size: 1600
+  methods:
+  - patch_match
+  - openmvs
+  - plane_sweep
+  - sgm
+  - casmvsnet
+  - mvsnet
+  - patchmatchnet
+  - vggt_omega
+  - mapanything
+  openmvs:
+    bin_dir: null
+    container: t2/openmvs:2.4.0
+    max_threads: 0
+    number_views: 5
+    resolution_level: 1
+  patch_match:
+    cache_size: 32
+    geom_consistency: true
+    num_iterations: 3
+    num_samples: 15
+    num_src_images: 20
+    window_radius: 5
+  ref_step: 1
+  rerun: false
+  vggt_omega:
+    checkpoint: null
+    model: vggt_1b
+dense_compare:
+  enabled: false
+detection:
+  max_frames: 20
+  methods:
+  - sift
+  - orb
+  - akaze
+  nfeatures: 5000
+  reps: 3
+  warmup: 1
+evaluation:
+  ablation_runs: []
+  enabled: true
+  hard_regions: true
+  inlier_px: 2.0
+  loop_closed: null
+  measured_cm: []
+  measurements_file: configs/measurements/kitchen_my_home.yaml
+  metric_scale: leave_one_out
+  texture_radius_px: 30
+  texture_split_quantile: 0.5
+export:
+  enabled: false
+  isolated_diameter_frac: 0.1
+  normals_k: 10
+  normals_smooth_iter: 0
+  poisson_depth: 10
+  poisson_point_weight: 4.0
+  poisson_samples_per_node: 1.5
+extraction:
+  analysis_width: 640
+  blur:
+    coef_min: 0.5
+    discard_jpeg_quality: 90
+    discard_width: 640
+    enabled: false
+    keep_for_sfm_only: true
+    motion_ratio_max: 4.0
+    window: 9
+  image_format: png
+  jpeg_quality: 95
+  lowe_ratio: 0.75
+  max_adjust_iters: 12
+  max_frames: null
+  max_side: 1920
+  min_frames: 0
+  min_good_matches: 15
+  min_inliers: 12
+  nfeatures: 1000
+  output_dir: cozinha_ablacao/frames/stride160
+  overlap: 0.7
+  overlap_max: 0.8
+  overlap_min: 0.6
+  overlap_step: 0.025
+  ransac_threshold_px: 3.0
+  rerun: false
+  selection: all
+  sharp_percentile: 25
+  stride: 160
+  tag: null
+  video: cozinha.MOV
+filters:
+  cross_check: true
+  lowe_ratio: 0.75
+  min_matches: 10
+floorplan:
+  cell_cm: 5.0
+  dpi: 150
+  enabled: true
+  extent_percentiles:
+  - 1
+  - 99
+  fallback:
+  - percentiles
+  - room_fill
+  fig_inches: 8.0
+flow: gpu
+frame_quality:
+  blur:
+    laplacian_var_min: 0.0
+    relative_to_median: 0.5
+  contrast:
+    std_min: 20.0
+  exposure:
+    clipped_max_frac: 0.05
+    mean_max: 215
+    mean_min: 40
+  resize_width: 640
+  texture:
+    fast_threshold: 20
+    min_keypoints: 50
+gaussian_splatting:
+  data_device: cpu
+  enabled: false
+  eval: true
+  gpu_index: '0'
+  iterations: 30000
+  max_image_size: 1600
+  python: ~/gaussian-splatting/.venv/bin/python
+  repo_dir: ~/gaussian-splatting
+  rerun: false
+  resolution: -1
+  sh_degree: 3
+  timeout_s: null
+geometry:
+  enabled: false
+  intrinsics:
+    cx: 960.0
+    cy: 540.0
+    fx: 1470.0
+    fy: 1470.0
+  ransac:
+    confidence: 0.999
+    max_iters: 5000
+    method: USAC_MAGSAC
+    threshold_px: 1.0
+lidar:
+  icp_voxels_cm:
+  - 8
+  - 4
+  - 2
+  methods: auto
+  path: null
+  taus_cm:
+  - 2
+  - 5
+  - 10
+  unit: m
+  voxel_cm: 1.0
+liepa:
+  density: 1.4142135623730951
+  enabled: false
+  fairing: 2
+  input: poisson
+  max_hole_edges: 1000
+  max_refine_iters: 30
+matching:
+  cross_check: false
+  enabled: false
+  flann:
+    binary_index:
+      algorithm: 6
+      key_size: 12
+      multi_probe_level: 1
+      table_number: 6
+    checks: 50
+    float_index:
+      algorithm: 1
+      trees: 5
+  name: brute_force
+  reps: 30
+  strategy: sequential
+  warmup: 2
+mesh:
+  enabled: false
+  frustum_cm: 20
+  frustum_every: 5
+  input: close_holes
+  trajectory_cm: 1.0
+photo_vs_render:
+  enabled: false
+  gs: true
+  max_size: 960
+  n_views: 6
+  point_px: 4
+  source: mesh
+planes:
+  angle_tol_deg: 15
+  distance_cm: 2.0
+  enabled: true
+  iterations: 2000
+  max_planes: 10
+  max_walls: 8
+  min_inlier_frac: 0.02
+  ransac_n: 3
+  source: sparse
+poisson:
+  density_quantile: 0.0
+  depth: 10
+  enabled: false
+  method:
+  - null
+  - openmvs
+  - plane_sweep
+  - sgm
+  - casmvsnet
+  - mvsnet
+  - patchmatchnet
+  - vggt_omega
+  - mapanything
+  normal_knn: 30
+  source: dense
+  threads: 32
+  variants:
+  - pre
+  - raw
+report:
+  max_figures: 5
+  max_rows: 20
+room_fill:
+  ceiling_height_cm: null
+  enabled: true
+  fit_rotations: 72
+  footprint_cm:
+  - - 0
+    - 0
+  - - 273
+    - 0
+  - - 273
+    - 429
+  - - 81.1
+    - 424.5
+  - - 0
+    - 332
+  grid_cm: 5.0
+  max_gap_cm: 5.0
+  source: patch_match
+  surfaces:
+  - floor
+  - ceiling
+  wall_band:
+  - 0.8
+  - 0.97
+run:
+  artifacts_root: cozinha_ablacao/artifacts
+  cache: true
+  id: seq_com_laco_146
+  log_level: INFO
+  output_root: cozinha_ablacao
+  overwrite: false
+  seed: 42
+scale:
+  aruco_dict: DICT_4X4_50
+  enabled: true
+  manual_pairs: []
+  marker_cm: null
+  method: outline
+  min_parallax_deg: 1.0
+  outline:
+    measurements: configs/measurements/kitchen_my_home.yaml
+    min_support: 0.4
+    wall_band:
+    - 0.7
+    - 0.99
+  provisional_extent_cm: 500
+sfm:
+  ba_global_frames_ratio: null
+  ba_global_max_num_iterations: null
+  ba_global_max_refinements: null
+  ba_use_gpu: false
+  backend: auto
+  camera_model: OPENCV
+  colmap_bin: colmap
+  enabled: true
+  fixed_dist:
+  - 0
+  - 0
+  - 0
+  - 0
+  gpu_index: '0'
+  instantsfm:
+    ba: false
+    ba_max_num_iterations: 100
+    max_frames: null
+    min_points_per_image: 50
+    min_track_length: 3
+    num_iteration_bundle_adjustment: 3
+    skip_pruning: true
+    skip_retriangulation: true
+    skip_view_graph_calibration: false
+  intrinsics: estimate
+  link_images: auto
+  loop_detection: true
+  mapper: global
+  mast3r_sfm:
+    ba: true
+    image_size: 512
+    lr1: 0.07
+    lr2: 0.01
+    matcher: exhaustive
+    matching_conf_thr: 0.0
+    max_frames: 200
+    min_points_per_image: 50
+    niter1: 300
+    niter2: 300
+    optim_level: refine+depth
+    refine_intrinsics: true
+    repo_dir: ~/mast3r
+    retrieval_k: 10
+    retrieval_na: 20
+    retrieval_url: https://download.europe.naverlabs.com/ComputerVision/MASt3R
+    scene_graph: retrieval
+    shared_intrinsics: true
+    subsample: 8
+    weights: naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric
+    weights_dir: ~/.cache/mast3r
+    window: 10
+  matcher: sequential
+  max_image_size: 1920
+  max_num_features: 8192
+  min_num_matches: 15
+  multiple_models: true
+  project_quality: high
+  rerun: false
+  sequential_overlap: 10
+  single_camera: true
+  technique: glomap
+  use_gpu: auto
+  vggt:
+    ba: true
+    dtype: auto
+    image_size: 518
+    matcher: exhaustive
+    max_frames: 80
+    min_points_per_image: 50
+    refine_intrinsics: true
+    weights: facebook/VGGT-1B
+  vocab_tree: https://github.com/colmap/colmap/releases/download/3.11.1/vocab_tree_faiss_flickr100K_words256K.bin;vocab_tree_faiss_flickr100K_words256K.bin;96ca8ec8ea60b1f73465aaf2c401fd3b3ca75cdba2d3c50d6a2f6f760f275ddc
+videos:
+  codec: auto
+  enabled: false
+  kept_vs_discarded: false
+  topdown_fps: 10
+  width: 960
+viewer:
+  background:
+  - 1.0
+  - 1.0
+  - 1.0
+  cloud: sparse
+  clouds:
+  - sparse
+  - patch_match
+  enabled: false
+  fov_deg: 60.0
+  fps: 30
+  frustum_cm: 20
+  height: 720
+  offscreen: auto
+  orbit_elevation_deg: 30.0
+  orbit_radius_factor: 1.5
+  point_size: 2.0
+  seconds: 45
+  timeout_s: 1800
+  width: 1280
+visualize:
+  epilines:
+    dpi: 150
+    n_lines: 20
+  matches:
+    dpi: 150
+    enabled: false
+    format: png
+    max_lines: 100
+    samples: 5
