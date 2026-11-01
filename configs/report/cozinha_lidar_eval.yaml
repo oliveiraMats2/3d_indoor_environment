@@ -1,0 +1,10 @@
+# T5: reconstrucao da cozinha x LiDAR (estagio lidar isolado; saidas em outputs/t5_lidar, nada em R e sobrescrito)
+lidar:
+  path: /home/moliveira/Documents/3d_indoor_environment/cozinha_lidar/fused/lidar_fused.ply
+  unit: m
+  up: y
+  voxel_cm: 1.0
+  taus_cm: [5, 10]
+  methods: [clean_patch_match, sparse]
+  mesh: false
+  measurements: /home/moliveira/Documents/3d_indoor_environment_report/configs/measurements/kitchen_my_home.yaml
