@@ -93,6 +93,16 @@ container by `flow: gpu` (GLOMAP). Optional extras (MASt3R-SfM, OpenMVS containe
 Check: `.venv-gpu/bin/python -c "import torch; print(torch.cuda.is_available())"` prints `True`, and
 `.venv-gpu/bin/python -m src.sfm.gpu` prints `OK`.
 
+## Execução rápida
+
+```bash
+./run.sh                       # main.py + view.py com config_cozinha.yaml
+./run.sh <config>.yaml         # idem, com outro config
+./run.sh -h                    # uso
+```
+
+O `run.sh` roda o pipeline (`main.py`) e em seguida o visualizador (`view.py`) com o mesmo config.
+
 ## Run
 
 CPU flow (default):
