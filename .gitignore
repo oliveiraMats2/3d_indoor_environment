@@ -57,3 +57,6 @@ third_party/
 # workspace of cozinha.MOV (config_cozinha.yaml) and of the LiDAR capture (config_cozinha_lidar.yaml)
 /cozinha/
 /cozinha_lidar/
+# local notes (audit report, assignment statement)
+/auditoria_pipeline.md
+/T2_enunciado.md
